@@ -5,4 +5,5 @@ __pycache__/
 .env
 *.pem
 .DS_Store
+.claude/
 generate_infographic.py
