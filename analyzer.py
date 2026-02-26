@@ -245,14 +245,13 @@ class ZboziAnalyzer:
         }
 
     def _fetch_items(self, report: AnalysisReport):
-        # S loadProductDetail limit max 30 → stránkovat
+        # Bez loadProductDetail → limit 3000, stáhneme vše
         all_items = []
         offset = 0
-        batch_size = 30
-        max_items = 1000  # Omezení na rozumný počet
+        batch_size = 3000
 
-        # První stránka – zjistíme totalCount
-        data = self._safe("items", report, lambda: self.api.get_items(limit=batch_size, offset=0))
+        # První stránka
+        data = self._safe("items", report, lambda: self.api.get_items_basic(limit=batch_size, offset=0))
         if not data:
             return
         items = data.get("data", [])
@@ -264,13 +263,13 @@ class ZboziAnalyzer:
         all_items.extend(items)
         offset = len(items)
 
-        # Další stránky
-        while offset < min(total, max_items) and len(items) == batch_size:
+        # Další stránky pokud je víc než 3000
+        while offset < total and len(items) == batch_size:
             cur_offset = offset
             data = self._safe(
                 f"items_p{offset}",
                 report,
-                lambda o=cur_offset: self.api.get_items(limit=batch_size, offset=o),
+                lambda o=cur_offset: self.api.get_items_basic(limit=batch_size, offset=o),
             )
             if not data:
                 break
@@ -295,7 +294,7 @@ class ZboziAnalyzer:
         report.items_no_delivery = sum(1 for n in normalized if not n["hasDelivery"])
         report.items_no_params = sum(1 for n in normalized if not n["hasParams"])
         report.items_no_ean = sum(1 for n in normalized if not n["hasEan"])
-        report.raw_items = normalized[:1000]
+        report.raw_items = normalized
 
     # ─────────────────────────────────────────────────────────
     # Fetching – Product details (konkurenční data)

@@ -1,9 +1,11 @@
+import csv
 import dataclasses
+import io
 import json
 import math
 import traceback
 
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, Response
 
 from zbozi_api import ZboziAPI, ZboziAPIError
 from analyzer import ZboziAnalyzer
@@ -165,6 +167,41 @@ def api_call():
         tb = traceback.format_exc()
         app.logger.error(tb)
         return jsonify({"error": "Chyba při volání API.", "trace": tb}), 500
+
+
+@app.route("/export/csv", methods=["POST"])
+def export_csv():
+    """Export dat jako CSV soubor."""
+    body = request.get_json(silent=True) or {}
+    data_type = body.get("type", "items")  # items | stats | categories | feed
+    rows = body.get("data", [])
+
+    if not rows:
+        return jsonify({"error": "Žádná data k exportu"}), 400
+
+    output = io.StringIO()
+    if rows:
+        # Hlavičky z klíčů prvního řádku
+        keys = list(rows[0].keys())
+        writer = csv.DictWriter(output, fieldnames=keys, extrasaction="ignore")
+        writer.writeheader()
+        for row in rows:
+            # Flatten nested values
+            flat = {}
+            for k in keys:
+                v = row.get(k)
+                if isinstance(v, (list, dict)):
+                    flat[k] = json.dumps(v, ensure_ascii=False)
+                else:
+                    flat[k] = v
+            writer.writerow(flat)
+
+    csv_content = output.getvalue()
+    return Response(
+        csv_content,
+        mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=zbozi_{data_type}.csv"},
+    )
 
 
 if __name__ == "__main__":

@@ -232,6 +232,7 @@
               <div class="card-body">
                 <div class="d-flex align-items-center gap-2 mb-3">
                   <span class="section-title mb-0">Vývoj za 30 dní</span>
+                  <button class="btn btn-outline-success btn-sm ms-2" onclick="exportCSV('statistiky',REPORT.raw_stats_daily)"><i class="bi bi-download me-1"></i>CSV</button>
                   <div class="btn-group btn-group-sm ms-auto" id="chart-btns">
                     <button class="btn btn-primary btn-sm active" onclick="setChart('vc',this)">Zobrazení & Kliknutí</button>
                     <button class="btn btn-outline-secondary btn-sm" onclick="setChart('cc',this)">Náklady & Konverze</button>
@@ -287,6 +288,7 @@
               <div class="card-body">
                 <div class="d-flex align-items-center mb-2">
                   <span class="section-title mb-0">Detailní analýza kategorií</span>
+                  <button class="btn btn-outline-success btn-sm ms-2" onclick="exportCSV('kategorie',REPORT.categories_analysis)"><i class="bi bi-download me-1"></i>CSV</button>
                   <span class="text-muted ms-auto small">Barevně: <span class="bc-green">silné</span> <span class="bc-orange">střední</span> <span class="bc-red">slabé</span> dle CTR</span>
                 </div>
                 <div class="table-responsive"><div id="cat-table"></div></div>
@@ -313,6 +315,7 @@
                 <button class="btn btn-outline-warning" onclick="setIFilter('expensive',this)">Dražší než min</button>
                 <button class="btn btn-outline-danger" onclick="setIFilter('noparam',this)">Bez parametrů</button>
               </div>
+              <button class="btn btn-outline-success btn-sm" onclick="exportCSV('items',_allI)"><i class="bi bi-download me-1"></i>CSV položky</button>
               <span class="text-muted small ms-auto" id="i-count"></span>
             </div>
             <div class="table-responsive">
@@ -1114,6 +1117,23 @@ async function exCall(){
 function exCopy(){
   const txt=document.getElementById('ex-result').textContent;
   if(txt) navigator.clipboard.writeText(txt);
+}
+
+/* ══════════════════════════════════════════════════════
+   CSV EXPORT
+══════════════════════════════════════════════════════ */
+async function exportCSV(type, data){
+  if(!data||!data.length){ alert('Žádná data k exportu'); return; }
+  try{
+    const r=await fetch('/export/csv',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({type,data})});
+    if(!r.ok){ alert('Chyba exportu'); return; }
+    const blob=await r.blob();
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url; a.download=`zbozi_${type}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  }catch(e){ alert('Chyba: '+e.message); }
 }
 </script>
 </body>
