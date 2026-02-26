@@ -168,4 +168,6 @@ def api_call():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5055, host="0.0.0.0")
+    import os
+    port = int(os.environ.get("PORT", 5055))
+    app.run(debug=os.environ.get("RAILWAY_ENVIRONMENT") is None, port=port, host="0.0.0.0")
