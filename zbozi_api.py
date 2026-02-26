@@ -191,26 +191,28 @@ class ZboziAPI:
         return self._get("/v1/shop/statistics/item/json")
 
     # ── Feed download & parse ──────────────────────────────────────────
-    def download_feed(self, feed_url: str, timeout: int = 60) -> List[Dict]:
+    def download_feed(self, feed_url: str, timeout: int = 180) -> List[Dict]:
         """Stáhne XML feed a vrátí seznam položek s klíčovými elementy."""
         if not feed_url:
             raise ZboziAPIError("Feed URL je prázdné")
         try:
-            resp = requests.get(feed_url, timeout=timeout)
+            resp = requests.get(feed_url, timeout=timeout, stream=True)
             resp.raise_for_status()
+            content = resp.content
         except requests.RequestException as e:
             raise ZboziAPIError(f"Nelze stáhnout feed: {e}")
 
         items = []
         try:
-            root = ET.fromstring(resp.content)
-            for elem in root.iter():
-                # Porovnání bez namespace a case-insensitive
+            for event, elem in ET.iterparse(
+                __import__("io").BytesIO(content), events=("end",)
+            ):
                 local = self._local_tag(elem.tag)
                 if local == "shopitem":
                     item = self._parse_shopitem(elem)
                     if item:
                         items.append(item)
+                    elem.clear()
         except ET.ParseError as e:
             raise ZboziAPIError(f"Chyba parsování XML feedu: {e}")
 
