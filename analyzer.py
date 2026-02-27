@@ -57,6 +57,7 @@ class AnalysisReport:
 
     # ── Feed data (z XML) ─────────────────────────────────
     feed_items_by_id: Dict = field(default_factory=dict)
+    feed_quality: Dict = field(default_factory=dict)  # analýza kvality feedu
 
     # ── Raw data pro dashboard ───────────────────────────────
     raw_items: List[Dict] = field(default_factory=list)
@@ -101,6 +102,7 @@ class ZboziAnalyzer:
         self._fetch_reviews(report)
         self._fetch_category_params(report)
 
+        self._analyze_feed_quality(report)
         self._analyze_categories(report)
         self._build_feed_recommendations(report)
         self._build_sklik_recommendations(report)
@@ -325,8 +327,8 @@ class ZboziAnalyzer:
         if not product_ids:
             return
 
-        # Omezit na max 100 produktů (aby API volání netrvalo desítky minut)
-        product_ids = product_ids[:100]
+        # Omezit na max 500 produktů (50 batchů × 2s = ~2 min)
+        product_ids = product_ids[:500]
 
         # Volat API po dávkách max 10
         product_data = {}  # productId -> {shopCount, minPrice, maxPrice}
@@ -689,6 +691,97 @@ class ZboziAnalyzer:
     # Analýza kategorií
     # ─────────────────────────────────────────────────────────
 
+    def _analyze_feed_quality(self, report: AnalysisReport):
+        """Analyzuje kvalitu XML feedu – chybějící elementy, doporučení EXTRA_MESSAGE."""
+        if not report.feed_items_by_id:
+            return
+
+        feed_items = list(report.feed_items_by_id.values())
+        total = len(feed_items)
+
+        # Spočítat přítomnost klíčových elementů
+        has = {
+            "price": 0, "ean": 0, "deliveryDate": 0, "imgUrl": 0,
+            "categoryText": 0, "manufacturer": 0, "params": 0,
+            "extraMessage": 0, "priceBeforeDiscount": 0, "salesVoucher": 0,
+            "warranty": 0, "maxCpc": 0,
+        }
+        # Cenové pásma pro EXTRA_MESSAGE doporučení
+        premium_items = []     # > 2000 Kč – dárkové balení, splátky
+        gift_set_items = []    # dárkové sady
+        delivery_free = 0
+
+        for fi in feed_items:
+            if fi.get("price") is not None: has["price"] += 1
+            if fi.get("ean"): has["ean"] += 1
+            if fi.get("deliveryDate") is not None: has["deliveryDate"] += 1
+            if fi.get("imgUrl"): has["imgUrl"] += 1
+            if fi.get("categoryText"): has["categoryText"] += 1
+            if fi.get("manufacturer"): has["manufacturer"] += 1
+            if fi.get("params"): has["params"] += 1
+
+            price = fi.get("price") or 0
+            name = (fi.get("productName") or "").lower()
+
+            if price >= 2000:
+                premium_items.append(fi)
+            if any(kw in name for kw in ["dárk", "gift", "set ", "sada", "kazeta"]):
+                gift_set_items.append(fi)
+
+        # EXTRA_MESSAGE doporučení dle typu produktu
+        extra_message_recs = []
+
+        # Doprava zdarma – 100% položek má DELIVERY_PRICE=0
+        extra_message_recs.append({
+            "message": "free_return",
+            "label": "Vrácení s dopravou zdarma",
+            "count": total,
+            "reason": "Pokud eshop nabízí bezplatné vrácení, zvýší to konverzi u prémiové kosmetiky.",
+        })
+
+        if gift_set_items:
+            extra_message_recs.append({
+                "message": "gift_package",
+                "label": "Dárkové balení",
+                "count": len(gift_set_items),
+                "reason": f"{len(gift_set_items)} produktů jsou dárkové sady/sety – ideální kandidáti.",
+            })
+
+        if premium_items:
+            extra_message_recs.append({
+                "message": "split_payment",
+                "label": "Možnost nákupu na splátky",
+                "count": len(premium_items),
+                "reason": f"{len(premium_items)} produktů stojí nad 2 000 Kč – splátky snižují bariéru nákupu.",
+            })
+
+        extra_message_recs.append({
+            "message": "voucher",
+            "label": "Voucher na další nákup",
+            "count": total,
+            "reason": "Slevový kód na příští nákup zvyšuje opakované konverze u kosmetiky.",
+        })
+
+        extra_message_recs.append({
+            "message": "free_gift",
+            "label": "Dárek zdarma (vzorky)",
+            "count": total,
+            "reason": "Vzorky parfémů/kosmetiky k objednávce – běžná praxe, silný konverzní faktor.",
+        })
+
+        report.feed_quality = {
+            "total": total,
+            "has": has,
+            "missing_extra_message": total,
+            "missing_params": total - has["params"],
+            "missing_price_before_discount": total,
+            "missing_warranty": total,
+            "missing_max_cpc": total,
+            "premium_items_count": len(premium_items),
+            "gift_set_count": len(gift_set_items),
+            "extra_message_recommendations": extra_message_recs,
+        }
+
     def _analyze_categories(self, report: AnalysisReport):
         cat_agg: Dict[str, dict] = defaultdict(lambda: {
             "category": "",
@@ -868,21 +961,75 @@ class ZboziAnalyzer:
                 affected=report.items_no_delivery,
             ))
 
-        recs.append(Recommendation(
-            priority="important", section="delivery_methods",
-            title="Nastavte způsoby doručení v hlavičce XML feedu",
-            detail=(
-                "Bez DELIVERY elementů v headeru feedu nebo u každé položky Zboží.cz nezobrazí\n"
-                "dopravu a zákazníci nevidí cenu dopravy v náhledu."
-            ),
-            example=(
-                "<!-- V hlavičce SHOP -->\n"
-                "<DELIVERY id=\"CESKA_POSTA\" price=\"79\" price_cod=\"89\"/>\n"
-                "<DELIVERY id=\"PPL\" price=\"99\" price_cod=\"109\"/>\n"
-                "<DELIVERY id=\"ZASILKOVNA\" price=\"59\" price_cod=\"79\"/>\n"
-                "<DELIVERY id=\"OSOBNI_ODBER\" price=\"0\"/>"
-            ),
-        ))
+        # EXTRA_MESSAGE doporučení z feed analýzy
+        fq = report.feed_quality
+        if fq and fq.get("missing_extra_message", 0) > 0:
+            em_recs = fq.get("extra_message_recommendations", [])
+            em_detail_parts = []
+            for em in em_recs:
+                em_detail_parts.append(
+                    f"• {em['label']} ({em['message']}): {em['count']} položek – {em['reason']}"
+                )
+            recs.append(Recommendation(
+                priority="important", section="extra_message",
+                title=f"Žádná položka nemá EXTRA_MESSAGE – přidejte akční štítky",
+                detail=(
+                    "EXTRA_MESSAGE se zobrazuje přímo ve výpisu na Nákupech a výrazně zvyšuje CTR.\n"
+                    "Doporučené akce pro váš sortiment:\n\n" + "\n".join(em_detail_parts)
+                ),
+                example=(
+                    "<EXTRA_MESSAGE>\n"
+                    "  <EXTRA_MESSAGE_TYPE>free_gift</EXTRA_MESSAGE_TYPE>\n"
+                    "  <EXTRA_MESSAGE_TEXT>Vzorky parfémů zdarma</EXTRA_MESSAGE_TEXT>\n"
+                    "</EXTRA_MESSAGE>\n"
+                    "<EXTRA_MESSAGE>\n"
+                    "  <EXTRA_MESSAGE_TYPE>gift_package</EXTRA_MESSAGE_TYPE>\n"
+                    "</EXTRA_MESSAGE>"
+                ),
+                affected=fq["missing_extra_message"],
+            ))
+
+        # PRICE_BEFORE_DISCOUNT
+        if fq and fq.get("missing_price_before_discount", 0) > 0:
+            recs.append(Recommendation(
+                priority="important", section="price_discount",
+                title="Žádná položka nemá PRICE_BEFORE_DISCOUNT – zviditelněte slevy",
+                detail=(
+                    "Pokud eshop nabízí zlevněné produkty, přidejte původní cenu.\n"
+                    "Na Nákupech se zobrazí přeškrtnutá cena a procentuální sleva (5–90 %).\n"
+                    "To výrazně zvyšuje CTR u slevových položek."
+                ),
+                example=(
+                    "<PRICE_VAT>1290</PRICE_VAT>\n"
+                    "<PRICE_BEFORE_DISCOUNT>1590</PRICE_BEFORE_DISCOUNT>"
+                ),
+                affected=fq["missing_price_before_discount"],
+            ))
+
+        # WARRANTY
+        if fq and fq.get("missing_warranty", 0) > 0:
+            recs.append(Recommendation(
+                priority="tip", section="warranty",
+                title="Žádná položka nemá WARRANTY – přidejte záruční dobu",
+                detail="Záruční doba zvyšuje důvěryhodnost nabídky a může ovlivnit rozhodování zákazníka.",
+                example="<WARRANTY>24</WARRANTY>  <!-- měsíce -->",
+                affected=fq["missing_warranty"],
+            ))
+
+        # MAX_CPC z feedu
+        if fq and fq.get("missing_max_cpc", 0) > 0:
+            recs.append(Recommendation(
+                priority="tip", section="max_cpc_feed",
+                title="Žádná položka nemá MAX_CPC – řiďte bidding přímo z feedu",
+                detail=(
+                    "MAX_CPC a MAX_CPC_SEARCH v feedu umožňují nastavit maximální cenu za proklik\n"
+                    "per položku. Můžete tak zvýšit CPC u produktů s vysokou marží a snížit u ztrátových."
+                ),
+                example=(
+                    "<MAX_CPC>3.50</MAX_CPC>\n"
+                    "<MAX_CPC_SEARCH>2.80</MAX_CPC_SEARCH>"
+                ),
+            ))
 
         if report.items_no_params > 0:
             pct = round(report.items_no_params / total * 100) if total else 0
