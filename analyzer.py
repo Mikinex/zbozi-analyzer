@@ -175,16 +175,17 @@ class ZboziAnalyzer:
     # ─────────────────────────────────────────────────────────
 
     def _normalize_item(self, item: dict) -> dict:
-        # Párování: product objekt existuje = spárováno
+        # Párování: product objekt z API nebo matchingId = spárováno
+        # Na Zboží.cz má každá nabídka produktovou kartu (auto/manuální)
         product = item.get("product")
-        paired = product is not None and isinstance(product, dict)
+        paired = (product is not None and isinstance(product, dict)) or bool(item.get("matchingId"))
 
         product_id = None
         top_position = None
         from_cheapest_position = None
         cat_id = item.get("categoryId")
 
-        if paired:
+        if product and isinstance(product, dict):
             product_id = product.get("productId")
             if not cat_id:
                 cat_id = product.get("categoryId")
@@ -196,7 +197,7 @@ class ZboziAnalyzer:
 
         # Cena – z item nebo product
         price = item.get("price")
-        if price is None and paired:
+        if price is None and product and isinstance(product, dict):
             price = product.get("price")
         if price is not None:
             price = float(price)
@@ -279,11 +280,13 @@ class ZboziAnalyzer:
             for fid, fdata in report.feed_items_by_id.items():
                 if fid not in api_ids:
                     # Vytvořit pseudo-API item z feedu
+                    # Všechny položky ve feedu jsou spárované na Zboží.cz
                     all_items.append({
                         "itemId": fid,
                         "name": fdata.get("productName", ""),
                         "categoryId": None,
                         "condition": "new",
+                        "matchingId": "feed",
                         "from_feed": True,
                     })
 
