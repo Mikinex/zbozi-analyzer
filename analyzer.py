@@ -90,9 +90,9 @@ class ZboziAnalyzer:
         )
         self._fetch_diagnostics(report)
         self._fetch_feeds(report)
-        self._fetch_feed_content(report)
+        # Feed download přeskočen – 29MB XML způsobuje timeout na serveru
+        # Data z feedu lze stáhnout přes API Explorer (endpoint feed_download)
         self._fetch_items(report)
-        self._enrich_items_from_feed(report)
         self._fetch_product_details(report)
         self._fetch_campaign(report)
         self._fetch_stats_aggregated(report)
