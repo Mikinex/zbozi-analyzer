@@ -574,8 +574,16 @@ async function runAnalysis(){
   try{
     const resp=await fetch('/analyze/stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({shop_id:sid,api_key:key})});
     if(!resp.ok){
-      const d=await resp.json();
-      stopSpin(); err.textContent=(d.error||'Chyba.'); err.classList.remove('d-none'); return;
+      let msg='Chyba serveru ('+resp.status+').';
+      try{ const d=await resp.json(); msg=d.error||msg; }catch(e){}
+      stopSpin(); err.textContent=msg; err.classList.remove('d-none'); return;
+    }
+    const ct=resp.headers.get('content-type')||'';
+    if(!ct.includes('text/event-stream')){
+      // Fallback – server vrátil JSON místo SSE
+      let msg='Neočekávaná odpověď serveru.';
+      try{ const d=await resp.json(); if(d.error) msg=d.error; }catch(e){}
+      stopSpin(); err.textContent=msg; err.classList.remove('d-none'); return;
     }
     const reader=resp.body.getReader();
     const decoder=new TextDecoder();
@@ -588,20 +596,38 @@ async function runAnalysis(){
       buf=lines.pop();
       for(const line of lines){
         if(!line.startsWith('data: ')) continue;
-        const ev=JSON.parse(line.slice(6));
-        if(ev.type==='progress') updateSpin(ev.pct,ev.msg);
-        else if(ev.type==='result'){
-          stopSpin();
-          REPORT=ev.data; renderAll(ev.data);
+        try{
+          const ev=JSON.parse(line.slice(6));
+          if(ev.type==='progress') updateSpin(ev.pct,ev.msg);
+          else if(ev.type==='result'){
+            stopSpin();
+            REPORT=ev.data; renderAll(ev.data);
+            document.getElementById('results').classList.remove('d-none');
+            document.getElementById('results').scrollIntoView({behavior:'smooth'});
+          }else if(ev.type==='error'){
+            stopSpin();
+            err.textContent=(ev.error||'Chyba.')+(ev.trace?'\n\n'+ev.trace:'');
+            err.style.fontFamily=ev.trace?'monospace':'inherit';
+            err.classList.remove('d-none');
+          }
+        }catch(e){ /* skip malformed SSE line */ }
+      }
+    }
+    // Stream skončil – pokud ještě nemáme výsledek, zkusíme fallback
+    if(!REPORT){
+      updateSpin(50,'Stream přerušen, zkouším znovu…');
+      try{
+        const r2=await fetch('/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({shop_id:sid,api_key:key})});
+        const txt=await r2.text();
+        stopSpin();
+        try{
+          const d=JSON.parse(txt);
+          if(!r2.ok){ err.textContent=(d.error||'Chyba.')+(d.trace?'\n\n'+d.trace:''); err.style.fontFamily=d.trace?'monospace':'inherit'; err.classList.remove('d-none'); return; }
+          REPORT=d; renderAll(d);
           document.getElementById('results').classList.remove('d-none');
           document.getElementById('results').scrollIntoView({behavior:'smooth'});
-        }else if(ev.type==='error'){
-          stopSpin();
-          err.textContent=(ev.error||'Chyba.')+(ev.trace?'\n\n'+ev.trace:'');
-          err.style.fontFamily=ev.trace?'monospace':'inherit';
-          err.classList.remove('d-none');
-        }
-      }
+        }catch(e2){ err.textContent='Server vrátil neplatnou odpověď. Zkuste to znovu.'; err.classList.remove('d-none'); }
+      }catch(e2){ stopSpin(); err.textContent='Síťová chyba: '+e2.message; err.classList.remove('d-none'); }
     }
   }catch(e){ stopSpin(); err.textContent='Síťová chyba: '+e.message; err.classList.remove('d-none'); }
 }
