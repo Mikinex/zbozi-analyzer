@@ -90,8 +90,6 @@ class ZboziAnalyzer:
         )
         self._fetch_diagnostics(report)
         self._fetch_feeds(report)
-        # Feed download přeskočen – 29MB XML způsobuje timeout na serveru
-        # Data z feedu lze stáhnout přes API Explorer (endpoint feed_download)
         self._fetch_items(report)
         self._fetch_product_details(report)
         self._fetch_campaign(report)
@@ -313,6 +311,9 @@ class ZboziAnalyzer:
 
         if not product_ids:
             return
+
+        # Omezit na max 100 produktů (aby API volání netrvalo desítky minut)
+        product_ids = product_ids[:100]
 
         # Volat API po dávkách max 10
         product_data = {}  # productId -> {shopCount, minPrice, maxPrice}
