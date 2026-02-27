@@ -56,7 +56,8 @@ def analyze():
     try:
         api = ZboziAPI(shop_id, api_key)
         analyzer = ZboziAnalyzer(api)
-        report = analyzer.analyze(shop_id)
+        skip_feed = body.get("skip_feed", False)
+        report = analyzer.analyze(shop_id, skip_feed=skip_feed)
 
         # If authentication failed entirely, the diagnostics endpoint_status will say so
         diag_status = report.endpoint_status.get("diagnostics", "")

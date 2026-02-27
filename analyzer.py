@@ -83,16 +83,18 @@ class ZboziAnalyzer:
     def __init__(self, api: ZboziAPI):
         self.api = api
 
-    def analyze(self, shop_id: str) -> AnalysisReport:
+    def analyze(self, shop_id: str, skip_feed: bool = False) -> AnalysisReport:
         report = AnalysisReport(
             shop_id=shop_id,
             generated_at=datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
         )
         self._fetch_diagnostics(report)
         self._fetch_feeds(report)
-        self._fetch_feed_content(report)
+        if not skip_feed:
+            self._fetch_feed_content(report)
         self._fetch_items(report)
-        self._enrich_items_from_feed(report)
+        if not skip_feed:
+            self._enrich_items_from_feed(report)
         self._fetch_product_details(report)
         self._fetch_campaign(report)
         self._fetch_stats_aggregated(report)
