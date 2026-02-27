@@ -69,6 +69,13 @@ class ZboziAPI:
     def get_diagnostics(self) -> Any:
         return self._get("/v1/shop/diagnostics/item")
 
+    def get_diagnostics_detail(self, status: str = None, limit: int = 100) -> Any:
+        """Detail diagnostiky s možností filtrovat dle statusu."""
+        params = {"limit": limit}
+        if status:
+            params["status"] = status
+        return self._get("/v1/shop/diagnostics/item", params)
+
     # ── Položky ─────────────────────────────────────────────────────
     def get_items(self, limit: int = 3000, offset: int = 0,
                   load_product_detail: bool = True,

@@ -72,6 +72,9 @@ class AnalysisReport:
     feeds_info: List[Dict] = field(default_factory=list)
     campaign_info: Dict = field(default_factory=dict)
     category_params: Dict = field(default_factory=dict)
+    bidding_info: Dict = field(default_factory=dict)
+    items_not_visible: int = 0
+    items_without_category: int = 0
 
     # ── Stav API ─────────────────────────────────────────────
     endpoint_status: Dict[str, str] = field(default_factory=dict)
@@ -96,6 +99,7 @@ class ZboziAnalyzer:
         self._enrich_items_from_feed(report)
         self._fetch_product_details(report)
         self._fetch_campaign(report)
+        self._fetch_bidding(report)
         self._fetch_stats_aggregated(report)
         self._fetch_stats_category(report)
         self._fetch_stats_context(report)
@@ -171,6 +175,8 @@ class ZboziAnalyzer:
         report.items_ok = int(d.get("ok", 0))
         report.items_errors = int(d.get("error", 0))
         report.items_improvements = int(d.get("canBeImproved", 0))
+        report.items_not_visible = int(d.get("notVisible", 0))
+        report.items_without_category = int(d.get("withoutCategory", 0))
 
     # ─────────────────────────────────────────────────────────
     # Fetching – Položky
@@ -472,6 +478,16 @@ class ZboziAnalyzer:
         if isinstance(limit, dict):
             campaign["limit"] = limit
         report.campaign_info = campaign if campaign else d
+
+    def _fetch_bidding(self, report: AnalysisReport):
+        data = self._safe("bidding", report, self.api.get_bidding_info)
+        if not data:
+            # 404 = shop uses Sklik campaign bidding (not feed-based)
+            report.bidding_info = {"source": "sklik", "detail": "Bidding přes kampaň ve Skliku (endpoint nedostupný)"}
+            return
+        d = data if isinstance(data, dict) else {}
+        d["source"] = "feed"
+        report.bidding_info = d
 
     # ─────────────────────────────────────────────────────────
     # Fetching – Statistiky
@@ -1016,8 +1032,9 @@ class ZboziAnalyzer:
                 affected=fq["missing_warranty"],
             ))
 
-        # MAX_CPC z feedu
-        if fq and fq.get("missing_max_cpc", 0) > 0:
+        # MAX_CPC z feedu – jen pokud se nebiduje přes Sklik kampaň
+        bidding_source = (report.bidding_info or {}).get("source", "unknown")
+        if bidding_source != "sklik" and fq and fq.get("missing_max_cpc", 0) > 0:
             recs.append(Recommendation(
                 priority="tip", section="max_cpc_feed",
                 title="Žádná položka nemá MAX_CPC – řiďte bidding přímo z feedu",

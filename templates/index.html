@@ -690,15 +690,31 @@ function renderOverview(r){
         </div></div>`).join('')
     : '<span class="text-muted small">Feed info nedostupné</span>';
 
-  // Diagnostics raw
+  // Diagnostics
   const diag=r.raw_diagnostics||{};
-  document.getElementById('diag-block').innerHTML=Object.entries(diag).length
+  const diagLabels={total:'Celkem položek',ok:'V pořádku',error:'S chybou',canBeImproved:'Ke zlepšení',
+    notVisible:'Neviditelné',withoutCategory:'Bez kategorie',
+    okPercentage:'V pořádku %',canBeImprovedPercentage:'Ke zlepšení %',
+    errorPercentage:'S chybou %',notVisiblePercentage:'Neviditelné %'};
+  const diagColor=k=>k.match(/ok/i)?'success':k.match(/err/i)?'danger':k.match(/notVis/i)?'danger':k.match(/improv/i)?'warning':k.match(/withoutCat/i)?'warning':'secondary';
+  let diagHtml=Object.entries(diag).length
     ? Object.entries(diag).map(([k,v])=>{
-        const c=k.match(/ok/i)?'success':k.match(/err/i)?'danger':k.match(/improv|toImprov/i)?'warning':'secondary';
+        const c=diagColor(k);
+        const label=diagLabels[k]||k;
         return `<div class="d-flex justify-content-between small mb-1 p-2 rounded bg-${c}-subtle">
-          <span>${esc(k)}</span><strong class="text-${c}">${esc(String(v))}</strong></div>`;
+          <span>${esc(label)}</span><strong class="text-${c}">${esc(String(v))}</strong></div>`;
       }).join('')
     : '<span class="text-muted small">Diagnostika nedostupná</span>';
+  // Bidding info
+  const bid=r.bidding_info||{};
+  if(bid.source){
+    const bclass=bid.source==='sklik'?'info':'warning';
+    diagHtml+=`<div class="mt-2 p-2 rounded bg-${bclass}-subtle small">
+      <strong>Bidding:</strong> ${esc(bid.source==='sklik'?'Přes kampaň ve Skliku':'Z feedu (MAX_CPC)')}
+      ${bid.detail?'<br><span class="text-muted">'+esc(bid.detail)+'</span>':''}
+    </div>`;
+  }
+  document.getElementById('diag-block').innerHTML=diagHtml;
 }
 
 function renderDonut(id,labels,data,colors){
