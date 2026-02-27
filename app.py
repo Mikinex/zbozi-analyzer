@@ -3,6 +3,7 @@ import dataclasses
 import io
 import json
 import math
+import queue
 import traceback
 
 from flask import Flask, render_template, request, jsonify, Response
@@ -79,6 +80,89 @@ def analyze():
             "error": "Neočekávaná chyba serveru.",
             "trace": tb,
         }), 500
+
+
+@app.route("/analyze/stream", methods=["POST"])
+def analyze_stream():
+    """SSE endpoint – posílá progress events a nakonec výsledek."""
+    body = request.get_json(silent=True) or {}
+    shop_id = (body.get("shop_id") or "").strip()
+    api_key = (body.get("api_key") or "").strip()
+
+    if not shop_id or not api_key:
+        return jsonify({"error": "Zadejte ID provozovny a API klíč."}), 400
+
+    q = queue.Queue()
+
+    def progress_cb(pct, msg):
+        q.put(("progress", pct, msg))
+
+    def generate():
+        try:
+            api = ZboziAPI(shop_id, api_key)
+            analyzer = ZboziAnalyzer(api, progress_cb=progress_cb)
+            report = analyzer.analyze(shop_id)
+            report.feed_items_by_id = {}
+            result = _to_dict(report)
+            yield f"data: {json.dumps({'type': 'result', 'data': result}, ensure_ascii=False)}\n\n"
+        except ZboziAPIError as e:
+            yield f"data: {json.dumps({'type': 'error', 'error': str(e)}, ensure_ascii=False)}\n\n"
+        except Exception:
+            tb = traceback.format_exc()
+            app.logger.error(tb)
+            yield f"data: {json.dumps({'type': 'error', 'error': 'Neočekávaná chyba serveru.', 'trace': tb}, ensure_ascii=False)}\n\n"
+
+    # SSE with progress – since analyze is synchronous, we use a thread
+    import threading
+
+    result_q = queue.Queue()
+
+    def run_analysis():
+        try:
+            api = ZboziAPI(shop_id, api_key)
+            analyzer = ZboziAnalyzer(api, progress_cb=progress_cb)
+            report = analyzer.analyze(shop_id)
+            report.feed_items_by_id = {}
+            result_q.put(("ok", _to_dict(report)))
+        except ZboziAPIError as e:
+            result_q.put(("api_error", str(e)))
+        except Exception:
+            result_q.put(("error", traceback.format_exc()))
+
+    def stream():
+        t = threading.Thread(target=run_analysis, daemon=True)
+        t.start()
+        while True:
+            # Check for progress
+            try:
+                kind, pct, msg = q.get(timeout=0.5)
+                yield f"data: {json.dumps({'type': 'progress', 'pct': pct, 'msg': msg}, ensure_ascii=False)}\n\n"
+            except (queue.Empty, ValueError):
+                pass
+            # Check if result is ready
+            try:
+                result = result_q.get_nowait()
+                # Drain remaining progress messages
+                while not q.empty():
+                    try:
+                        kind, pct, msg = q.get_nowait()
+                        yield f"data: {json.dumps({'type': 'progress', 'pct': pct, 'msg': msg}, ensure_ascii=False)}\n\n"
+                    except (queue.Empty, ValueError):
+                        break
+                if result[0] == "ok":
+                    yield f"data: {json.dumps({'type': 'result', 'data': result[1]}, ensure_ascii=False)}\n\n"
+                elif result[0] == "api_error":
+                    yield f"data: {json.dumps({'type': 'error', 'error': result[1]}, ensure_ascii=False)}\n\n"
+                else:
+                    yield f"data: {json.dumps({'type': 'error', 'error': 'Neočekávaná chyba.', 'trace': result[1]}, ensure_ascii=False)}\n\n"
+                break
+            except queue.Empty:
+                pass
+
+    return Response(stream(), mimetype="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    })
 
 
 @app.route("/api/call", methods=["POST"])

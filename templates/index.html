@@ -217,6 +217,36 @@
             </div>
           </div>
 
+          <!-- Overpriced items -->
+          <div class="col-lg-6">
+            <div class="card">
+              <div class="card-body">
+                <div class="section-title"><i class="bi bi-arrow-up-circle text-danger me-1"></i>Dražší než konkurence – doporučení ceny</div>
+                <div id="comp-overpriced" class="small"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Cheapest / competitive advantage -->
+          <div class="col-lg-6">
+            <div class="card">
+              <div class="card-body">
+                <div class="section-title"><i class="bi bi-trophy text-success me-1"></i>Vaše nejlepší ceny (konkurenční výhoda)</div>
+                <div id="comp-cheapest" class="small"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- High demand products -->
+          <div class="col-12">
+            <div class="card">
+              <div class="card-body">
+                <div class="section-title"><i class="bi bi-fire text-warning me-1"></i>Nejžádanější produkty (nejvíc eshopů na kartě)</div>
+                <div id="comp-demand" class="small"></div>
+              </div>
+            </div>
+          </div>
+
         </div>
       </div>
 
@@ -517,27 +547,16 @@ function ctrBadge(ctr) {
 /* ══════════════════════════════════════════════════════
    SPINNER
 ══════════════════════════════════════════════════════ */
-const STEPS = [
-  [8,'Ověřuji API klíč…'],
-  [20,'Načítám diagnostiku feedu…'],
-  [35,'Stahuju položky katalogu (může trvat)…'],
-  [48,'Načítám XML feedy…'],
-  [55,'Stav kampaně…'],
-  [65,'Statistiky – denní data…'],
-  [75,'Statistiky kategorií…'],
-  [82,'Statistiky zařízení…'],
-  [88,'Recenze zákazníků…'],
-  [93,'Parametry kategorií…'],
-  [98,'Generuji doporučení…'],
-];
-let _si=0, _st;
 function startSpin(){
-  _si=0; document.getElementById('ov').classList.add('on');
-  _upd();
-  _st=setInterval(()=>{ if(_si<STEPS.length-1){ _si++; _upd(); } },2400);
+  document.getElementById('ov').classList.add('on');
+  document.getElementById('sp-bar').style.width='2%';
+  document.getElementById('sp-msg').textContent='Spouštím analýzu…';
 }
-function _upd(){ const[p,m]=STEPS[_si]; document.getElementById('sp-bar').style.width=p+'%'; document.getElementById('sp-msg').textContent=m; }
-function stopSpin(){ clearInterval(_st); document.getElementById('ov').classList.remove('on'); }
+function updateSpin(pct,msg){
+  document.getElementById('sp-bar').style.width=pct+'%';
+  document.getElementById('sp-msg').textContent=msg;
+}
+function stopSpin(){ document.getElementById('ov').classList.remove('on'); }
 
 /* ══════════════════════════════════════════════════════
    LOGIN
@@ -553,13 +572,37 @@ async function runAnalysis(){
   if(!sid||!key){ err.textContent='Vyplňte ID provozovny a API klíč.'; err.classList.remove('d-none'); return; }
   startSpin();
   try{
-    const r=await fetch('/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({shop_id:sid,api_key:key})});
-    const d=await r.json();
-    stopSpin();
-    if(!r.ok){ err.textContent=(d.error||'Chyba.')+(d.trace?'\n\n'+d.trace:''); err.style.fontFamily=d.trace?'monospace':'inherit'; err.classList.remove('d-none'); return; }
-    REPORT=d; renderAll(d);
-    document.getElementById('results').classList.remove('d-none');
-    document.getElementById('results').scrollIntoView({behavior:'smooth'});
+    const resp=await fetch('/analyze/stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({shop_id:sid,api_key:key})});
+    if(!resp.ok){
+      const d=await resp.json();
+      stopSpin(); err.textContent=(d.error||'Chyba.'); err.classList.remove('d-none'); return;
+    }
+    const reader=resp.body.getReader();
+    const decoder=new TextDecoder();
+    let buf='';
+    while(true){
+      const {done,value}=await reader.read();
+      if(done) break;
+      buf+=decoder.decode(value,{stream:true});
+      const lines=buf.split('\n');
+      buf=lines.pop();
+      for(const line of lines){
+        if(!line.startsWith('data: ')) continue;
+        const ev=JSON.parse(line.slice(6));
+        if(ev.type==='progress') updateSpin(ev.pct,ev.msg);
+        else if(ev.type==='result'){
+          stopSpin();
+          REPORT=ev.data; renderAll(ev.data);
+          document.getElementById('results').classList.remove('d-none');
+          document.getElementById('results').scrollIntoView({behavior:'smooth'});
+        }else if(ev.type==='error'){
+          stopSpin();
+          err.textContent=(ev.error||'Chyba.')+(ev.trace?'\n\n'+ev.trace:'');
+          err.style.fontFamily=ev.trace?'monospace':'inherit';
+          err.classList.remove('d-none');
+        }
+      }
+    }
   }catch(e){ stopSpin(); err.textContent='Síťová chyba: '+e.message; err.classList.remove('d-none'); }
 }
 
@@ -660,6 +703,54 @@ function renderOverview(r){
       </tr>`).join('')}</tbody>
     </table>
     ${r.items_price_worse>0?`<div class="mt-2 small text-muted"><i class="bi bi-info-circle me-1"></i>Přejděte na záložku <strong>Položky</strong> → filtr <em>Dražší než min</em> pro detail.</div>`:''}`;
+
+  // Top overpriced – doporučení ceny
+  const ovp=cs.topOverpriced||[];
+  document.getElementById('comp-overpriced').innerHTML=ovp.length
+    ? `<div class="table-responsive"><table class="table table-sm tbl mb-0"><thead><tr>
+        <th>Produkt</th><th class="text-end">Vaše cena</th><th class="text-end">Min. cena</th><th class="text-end">Doporuč. cena</th><th class="text-end">Rozdíl</th><th class="text-end">Eshopů</th>
+      </tr></thead><tbody>${ovp.map(i=>`<tr>
+        <td title="${esc(i.itemId||'')}">${esc((i.productName||i.itemId||'').substring(0,50))}</td>
+        <td class="text-end">${num(i.price)} Kč</td>
+        <td class="text-end text-success fw-semibold">${num(i.minPrice)} Kč</td>
+        <td class="text-end text-primary fw-semibold">${num(i.recommendedPrice)} Kč</td>
+        <td class="text-end text-danger">+${num(i.priceSavings)} Kč</td>
+        <td class="text-end">${i.shopCount||'—'}</td>
+      </tr>`).join('')}</tbody></table></div>
+      <div class="text-muted mt-1">Top ${ovp.length} položek kde jste dražší než konkurence. Zvažte snížení ceny.</div>`
+    : '<span class="text-muted">Žádné položky dražší než konkurence o >5 %</span>';
+
+  // Top cheapest
+  const chp=cs.topCheapest||[];
+  document.getElementById('comp-cheapest').innerHTML=chp.length
+    ? `<div class="table-responsive"><table class="table table-sm tbl mb-0"><thead><tr>
+        <th>Produkt</th><th class="text-end">Vaše cena</th><th class="text-end">Min. u ostatních</th><th class="text-end">Výhoda</th><th class="text-end">Eshopů</th>
+      </tr></thead><tbody>${chp.map(i=>`<tr>
+        <td title="${esc(i.itemId||'')}">${esc((i.productName||i.itemId||'').substring(0,50))}</td>
+        <td class="text-end text-success fw-semibold">${num(i.price)} Kč</td>
+        <td class="text-end">${num(i.minPrice)} Kč</td>
+        <td class="text-end text-success">${i.priceAdvantage?'-'+num(i.priceAdvantage)+' Kč':'= min'}</td>
+        <td class="text-end">${i.shopCount||'—'}</td>
+      </tr>`).join('')}</tbody></table></div>`
+    : '<span class="text-muted">Žádné položky s nejlepší cenou</span>';
+
+  // High demand
+  const hd=cs.topHighDemand||[];
+  document.getElementById('comp-demand').innerHTML=hd.length
+    ? `<div class="table-responsive"><table class="table table-sm tbl mb-0"><thead><tr>
+        <th>Produkt</th><th>Kategorie</th><th class="text-end">Vaše cena</th><th class="text-end">Eshopů na kartě</th><th class="text-end">Cena vs min</th>
+      </tr></thead><tbody>${hd.map(i=>{
+        const ratio=i.priceVsMin;
+        const rc=ratio>1.1?'text-danger':ratio>1.0?'text-warning':'text-success';
+        return `<tr>
+        <td title="${esc(i.itemId||'')}">${esc((i.productName||i.itemId||'').substring(0,50))}</td>
+        <td>${esc((i.category||'').substring(0,30))}</td>
+        <td class="text-end">${num(i.price)} Kč</td>
+        <td class="text-end fw-semibold">${i.shopCount}</td>
+        <td class="text-end ${rc}">${ratio?'×'+ratio.toFixed(2):'—'}</td>
+      </tr>`;}).join('')}</tbody></table></div>
+      <div class="text-muted mt-1">Produkty s 20+ eshopy na kartě – vysoká poptávka. Sledujte cenu a pozici.</div>`
+    : '<span class="text-muted">Žádné produkty s 20+ eshopy</span>';
 
   // Campaign – creditWithoutVAT, creditWithVAT, limit
   const camp=r.campaign_info||{};

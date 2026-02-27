@@ -84,32 +84,47 @@ class AnalysisReport:
 # ─────────────────────────────────────────────────────────────────
 class ZboziAnalyzer:
 
-    def __init__(self, api: ZboziAPI):
+    def __init__(self, api: ZboziAPI, progress_cb=None):
         self.api = api
+        self._progress_cb = progress_cb or (lambda pct, msg: None)
+
+    def _progress(self, pct: int, msg: str):
+        self._progress_cb(pct, msg)
 
     def analyze(self, shop_id: str) -> AnalysisReport:
         report = AnalysisReport(
             shop_id=shop_id,
             generated_at=datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
         )
+        self._progress(5, "Ověřuji API klíč…")
         self._fetch_diagnostics(report)
+        self._progress(10, "Načítám diagnostiku feedu…")
         self._fetch_feeds(report)
+        self._progress(15, "Stahuji XML feed (může trvat)…")
         self._fetch_feed_content(report)
+        self._progress(25, "Načítám položky katalogu…")
         self._fetch_items(report)
         self._enrich_items_from_feed(report)
+        self._progress(30, "Stahuji konkurenční data (trvá ~2 min)…")
         self._fetch_product_details(report)
+        self._progress(75, "Stav kampaně a biddingu…")
         self._fetch_campaign(report)
         self._fetch_bidding(report)
+        self._progress(80, "Statistiky – denní data…")
         self._fetch_stats_aggregated(report)
+        self._progress(85, "Statistiky kategorií…")
         self._fetch_stats_category(report)
         self._fetch_stats_context(report)
+        self._progress(90, "Recenze zákazníků…")
         self._fetch_reviews(report)
         self._fetch_category_params(report)
+        self._progress(95, "Generuji analýzu a doporučení…")
 
         self._analyze_feed_quality(report)
         self._analyze_categories(report)
         self._build_feed_recommendations(report)
         self._build_sklik_recommendations(report)
+        self._progress(100, "Hotovo!")
         return report
 
     # ─────────────────────────────────────────────────────────
@@ -337,8 +352,12 @@ class ZboziAnalyzer:
         product_ids = product_ids[:500]
 
         # Volat API po dávkách max 10
-        product_data = {}  # productId -> {shopCount, minPrice, maxPrice}
+        product_data = {}  # productId -> {shopCount, minPrice, maxPrice, shopItems}
+        total_batches = (len(product_ids) + 9) // 10
         for i in range(0, len(product_ids), 10):
+            batch_num = i // 10 + 1
+            pct = 30 + int(45 * batch_num / total_batches)  # 30-75%
+            self._progress(pct, f"Konkurenční data: batch {batch_num}/{total_batches}…")
             batch = product_ids[i:i+10]
             data = self._safe(
                 f"products_batch_{i//10}",
@@ -349,24 +368,22 @@ class ZboziAnalyzer:
                 continue
             # Odpověď je list produktů nebo dict
             products = data if isinstance(data, list) else data.get("data", data)
-            if isinstance(products, list):
-                for p in products:
-                    pid = p.get("productId") or p.get("id")
-                    if pid:
-                        product_data[pid] = {
-                            "shopCount": p.get("shopCount"),
-                            "minPrice": p.get("minPrice"),
-                            "maxPrice": p.get("maxPrice"),
-                        }
-            elif isinstance(products, dict) and "shopCount" in products:
-                # Jediný produkt
-                pid = products.get("productId") or products.get("id")
+            def _extract_product(p):
+                pid = p.get("productId") or p.get("id")
                 if pid:
                     product_data[pid] = {
-                        "shopCount": products.get("shopCount"),
-                        "minPrice": products.get("minPrice"),
-                        "maxPrice": products.get("maxPrice"),
+                        "shopCount": p.get("shopCount"),
+                        "minPrice": p.get("minPrice"),
+                        "maxPrice": p.get("maxPrice"),
+                        "productName": p.get("productName") or p.get("name"),
+                        "categoryId": p.get("categoryId"),
+                        "categoryName": p.get("categoryName"),
                     }
+            if isinstance(products, list):
+                for p in products:
+                    _extract_product(p)
+            elif isinstance(products, dict) and "shopCount" in products:
+                _extract_product(products)
 
         # Propojit zpět s položkami
         for item in report.raw_items:
@@ -377,8 +394,17 @@ class ZboziAnalyzer:
                 item["minPrice"] = pd["minPrice"]
                 item["maxPrice"] = pd["maxPrice"]
                 # Spočítat priceVsMin pokud máme cenu položky
-                if item.get("price") and pd["minPrice"] and pd["minPrice"] > 0:
-                    item["priceVsMin"] = round(float(item["price"]) / float(pd["minPrice"]), 3)
+                my_price = float(item["price"]) if item.get("price") else None
+                min_p = float(pd["minPrice"]) if pd.get("minPrice") and pd["minPrice"] > 0 else None
+                max_p = float(pd["maxPrice"]) if pd.get("maxPrice") and pd["maxPrice"] > 0 else None
+                if my_price and min_p:
+                    item["priceVsMin"] = round(my_price / min_p, 3)
+                    # Doporučená cena: pokud jsme dražší než min, doporučit min; jinak OK
+                    if my_price > min_p * 1.05:
+                        item["recommendedPrice"] = round(min_p, 0)
+                        item["priceSavings"] = round(my_price - min_p, 0)
+                    elif my_price < min_p:
+                        item["priceAdvantage"] = round(min_p - my_price, 0)
 
         # Přepočítat cenové metriky
         report.items_price_worse = sum(1 for n in report.raw_items if n.get("priceVsMin") and n["priceVsMin"] > 1.05)
@@ -898,6 +924,54 @@ class ZboziAnalyzer:
         # Souhrnná konkurenční analýza
         all_shop_counts = [item["shopCount"] for item in report.raw_items if item.get("shopCount")]
         all_price_ratios = [item["priceVsMin"] for item in report.raw_items if item.get("priceVsMin")]
+        # Položky kde jsme nejlevnější
+        cheapest = [i for i in report.raw_items if i.get("priceVsMin") and i["priceVsMin"] <= 1.0]
+        # Položky kde jsme dražší >5%
+        overpriced = [i for i in report.raw_items if i.get("priceVsMin") and i["priceVsMin"] > 1.05]
+        overpriced.sort(key=lambda x: x.get("priceSavings") or 0, reverse=True)
+
+        # Top produkty s největším cenovým rozdílem (příležitost ke snížení)
+        top_overpriced = []
+        for i in overpriced[:20]:
+            top_overpriced.append({
+                "itemId": i.get("itemId"),
+                "productName": i.get("productName"),
+                "price": i.get("price"),
+                "minPrice": i.get("minPrice"),
+                "recommendedPrice": i.get("recommendedPrice"),
+                "priceSavings": i.get("priceSavings"),
+                "shopCount": i.get("shopCount"),
+                "category": i.get("category"),
+            })
+
+        # Top produkty kde jsme nejlevnější (konkurenční výhoda)
+        cheapest.sort(key=lambda x: (x.get("shopCount") or 0), reverse=True)
+        top_cheapest = []
+        for i in cheapest[:20]:
+            top_cheapest.append({
+                "itemId": i.get("itemId"),
+                "productName": i.get("productName"),
+                "price": i.get("price"),
+                "minPrice": i.get("minPrice"),
+                "priceAdvantage": i.get("priceAdvantage"),
+                "shopCount": i.get("shopCount"),
+                "category": i.get("category"),
+            })
+
+        # Produkty s vysokou konkurencí (>20 obchodů) – žádané produkty
+        high_demand = [i for i in report.raw_items if i.get("shopCount") and int(i["shopCount"]) >= 20]
+        high_demand.sort(key=lambda x: int(x.get("shopCount") or 0), reverse=True)
+        top_high_demand = []
+        for i in high_demand[:20]:
+            top_high_demand.append({
+                "itemId": i.get("itemId"),
+                "productName": i.get("productName"),
+                "price": i.get("price"),
+                "shopCount": i.get("shopCount"),
+                "category": i.get("category"),
+                "priceVsMin": i.get("priceVsMin"),
+            })
+
         report.competition_summary = {
             "avgShopCount": avg(all_shop_counts),
             "medianShopCount": sorted(all_shop_counts)[len(all_shop_counts)//2] if all_shop_counts else None,
@@ -906,6 +980,11 @@ class ZboziAnalyzer:
             "avgPriceVsMin": avg(all_price_ratios),
             "priceBetterThan10pct": sum(1 for r in all_price_ratios if r <= 1.0),
             "priceWorseThan10pct": sum(1 for r in all_price_ratios if r > 1.1),
+            "countCheapest": len(cheapest),
+            "countOverpriced": len(overpriced),
+            "topOverpriced": top_overpriced,
+            "topCheapest": top_cheapest,
+            "topHighDemand": top_high_demand,
         }
 
     # ─────────────────────────────────────────────────────────
