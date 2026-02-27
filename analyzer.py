@@ -90,7 +90,9 @@ class ZboziAnalyzer:
         )
         self._fetch_diagnostics(report)
         self._fetch_feeds(report)
+        self._fetch_feed_content(report)
         self._fetch_items(report)
+        self._enrich_items_from_feed(report)
         self._fetch_product_details(report)
         self._fetch_campaign(report)
         self._fetch_stats_aggregated(report)
@@ -243,45 +245,53 @@ class ZboziAnalyzer:
         }
 
     def _fetch_items(self, report: AnalysisReport):
-        # Bez loadProductDetail → limit 3000, stáhneme vše
         all_items = []
-        offset = 0
-        batch_size = 3000
 
-        # První stránka
-        data = self._safe("items", report, lambda: self.api.get_items_basic(limit=batch_size, offset=0))
-        if not data:
-            return
-        items = data.get("data", [])
-        if not isinstance(items, list):
-            return
+        # 1) Zkusit items/basic (limit 3000)
+        data = self._safe("items_basic", report, lambda: self.api.get_items_basic(limit=3000, offset=0))
+        if data and isinstance(data.get("data"), list):
+            all_items = data["data"]
+            total = data.get("totalCount", len(all_items))
+            # Další stránky
+            while len(all_items) < total:
+                offset = len(all_items)
+                page = self._safe(f"items_p{offset}", report,
+                                  lambda o=offset: self.api.get_items_basic(limit=3000, offset=o))
+                if not page or not isinstance(page.get("data"), list) or not page["data"]:
+                    break
+                all_items.extend(page["data"])
 
-        total = data.get("totalCount", len(items))
-        report.items_total = max(report.items_total, total)
-        all_items.extend(items)
-        offset = len(items)
+        # 2) Pokud items/basic selhal, zkusit normální items (limit 30, prvních 300)
+        if not all_items:
+            for offset in range(0, 300, 30):
+                cur_offset = offset
+                data = self._safe(f"items_{offset}", report,
+                                  lambda o=cur_offset: self.api.get_items(limit=30, offset=o,
+                                                                          load_product_detail=False,
+                                                                          load_search_info=False))
+                if not data or not isinstance(data.get("data"), list) or not data["data"]:
+                    break
+                all_items.extend(data["data"])
 
-        # Další stránky pokud je víc než 3000
-        while offset < total and len(items) == batch_size:
-            cur_offset = offset
-            data = self._safe(
-                f"items_p{offset}",
-                report,
-                lambda o=cur_offset: self.api.get_items_basic(limit=batch_size, offset=o),
-            )
-            if not data:
-                break
-            items = data.get("data", [])
-            if not isinstance(items, list) or not items:
-                break
-            all_items.extend(items)
-            offset += len(items)
+        # 3) Pokud máme feed, doplnit položky které chybí v API
+        if report.feed_items_by_id:
+            api_ids = {str(item.get("itemId", "")) for item in all_items}
+            for fid, fdata in report.feed_items_by_id.items():
+                if fid not in api_ids:
+                    # Vytvořit pseudo-API item z feedu
+                    all_items.append({
+                        "itemId": fid,
+                        "name": fdata.get("productName", ""),
+                        "categoryId": None,
+                        "condition": "new",
+                        "from_feed": True,
+                    })
 
-        report.endpoint_status["items"] = f"ok ({len(all_items)}/{total} položek)"
+        report.items_total = max(report.items_total, len(all_items))
+        report.endpoint_status["items"] = f"ok ({len(all_items)} položek)"
 
         paired = 0
         normalized = []
-
         for item in all_items:
             n = self._normalize_item(item)
             if n["paired"]:
