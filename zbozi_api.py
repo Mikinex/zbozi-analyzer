@@ -150,10 +150,13 @@ class ZboziAPI:
         })
 
     def get_product_reviews(self, limit: int = 100, days: int = 30) -> Any:
+        # Oprava: přidán parametr "offset": 0 (konzistentní s get_reviews).
+        # Endpoint /v1/shop/product-reviews nemusí být dostupný pro všechny provozovny.
         ts_from = int((datetime.now() - timedelta(days=min(days, 180))).timestamp())
         return self._get("/v1/shop/product-reviews", {
             "timestampFrom": ts_from,
             "limit": limit,
+            "offset": 0,
         })
 
     # ── Produkty (konkurenční data) ──────────────────────────────────
@@ -237,11 +240,20 @@ class ZboziAPI:
     def _parse_shopitem(cls, elem) -> Optional[Dict]:
         """Extrahuje klíčové elementy z SHOPITEM."""
         # Sestavit mapu tag → text pro přímé potomky
+        # Oprava: <PARAM> elementy jsou uvnitř <PARAMS>, ne přímí potomci <SHOPITEM>.
+        # Původní kód hledal local == "param" přímo v potomcích SHOPITEM, ale ty jsou
+        # zabaleny ve <PARAMS> obalovacím elementu – proto params bylo vždy prázdné.
         children = {}
         params_elems = []
         for child in elem:
             local = cls._local_tag(child.tag)
-            if local == "param":
+            if local == "params":
+                # Správně: <PARAMS> obsahuje vnořené <PARAM> elementy
+                for param_child in child:
+                    if cls._local_tag(param_child.tag) == "param":
+                        params_elems.append(param_child)
+            elif local == "param":
+                # Fallback: někdy může být <PARAM> přímo pod <SHOPITEM>
                 params_elems.append(child)
             elif local not in children:
                 children[local] = (child.text or "").strip() if child.text else None

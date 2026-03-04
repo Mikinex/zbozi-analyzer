@@ -570,6 +570,7 @@ async function runAnalysis(){
   const err=document.getElementById('err');
   err.classList.add('d-none');
   if(!sid||!key){ err.textContent='Vyplňte ID provozovny a API klíč.'; err.classList.remove('d-none'); return; }
+  resetAll();
   startSpin();
   try{
     const resp=await fetch('/analyze/stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({shop_id:sid,api_key:key})});
@@ -637,6 +638,40 @@ async function runAnalysis(){
 ══════════════════════════════════════════════════════ */
 let REPORT=null, _chart=null;
 
+function resetAll(){
+  // Zničit všechny Chart.js instance
+  if(_chart){_chart.destroy();_chart=null;}
+  Chart.helpers.each(Chart.instances,(c)=>{if(c)c.destroy();});
+  // Reset stavu
+  _daily=[]; _chartMode='vc';
+  _allI=[]; _filtI=[]; _iSort='name'; _iAsc=true; _iFilter='all'; _iPage=0;
+  REPORT=null;
+  // Vyčistit DOM
+  ['kpi-row','items-legend','comp-summary','camp-block','feed-block','diag-block',
+   'comp-overpriced','comp-cheapest','comp-demand','stats-kpis','dev-table','perf-detail',
+   'cat-table','itbody','rev-summary','rev-list','prod-rev-list','feed-recs','sklik-recs',
+   'ep-list','warn-list','dev-legend'].forEach(id=>{
+    const el=document.getElementById(id);
+    if(el) el.innerHTML='';
+  });
+  ['donut-items','donut-dev','daily-chart','cat-chart'].forEach(id=>{
+    const el=document.getElementById(id);
+    if(el){
+      const parent=el.parentElement;
+      const h=el.style.height||parent.style.height;
+      parent.innerHTML=`<canvas id="${id}"></canvas>`;
+      if(h) parent.style.height=h;
+    }
+  });
+  document.getElementById('raw-diag').textContent='';
+  document.getElementById('nav-sub').textContent='';
+  document.getElementById('i-count').textContent='';
+  document.getElementById('ipage').textContent='';
+  document.getElementById('cats-badge').textContent='';
+  document.getElementById('items-badge').textContent='';
+  document.getElementById('rev-badge').textContent='';
+}
+
 function renderAll(r){
   renderKPIs(r);
   renderOverview(r);
@@ -670,7 +705,9 @@ function renderKPIs(r){
     {v:num(r.reviews_total),  l:'Recenzí (rok)',    cls:'kpi-neutral',  i:'star'},
     {v:cs.avgShopCount?cs.avgShopCount.toFixed(1):'—', l:'Prům. eshopů/karta', cls:'kpi-neutral', i:'shop'},
     {v:r.items_price_worse>0?num(r.items_price_worse):'✓', l:'Dražší než min +5%', cls:r.items_price_worse>0?'kpi-warning':'kpi-success', i:'arrow-up-circle'},
-    {v:num(r.perf_conversions>0?r.perf_conv_rate:null)+( r.perf_conv_rate?'%':''), l:'Konv. poměr', cls:'kpi-neutral', i:'graph-up-arrow'},
+    // Oprava: perf_conv_rate=0.0 je falsy v JS, takže "0 %" se zobrazilo jako "—".
+    // Nyní zobrazujeme "—" jen pokud nejsou žádná kliknutí (nelze spočítat poměr).
+    {v:r.perf_clicks>0?(num(r.perf_conv_rate,2)+'%'):'—', l:'Konv. poměr', cls:'kpi-neutral', i:'graph-up-arrow'},
   ];
   document.getElementById('kpi-row').innerHTML=tiles.map(t=>`
     <div class="col-6 col-md-3 col-lg-2 col-xl-1-5">
@@ -898,7 +935,7 @@ function renderStats(r){
         ['Průměrná denní kliknutí',num(r.perf_clicks/30,0)],
         ['Celková výdaje (30d)',num(r.perf_cost,0)+' Kč'],
         ['Průměrné CPC',num(r.perf_avg_cpc,2)+' Kč'],
-        ['Konverzní poměr',r.perf_conv_rate+'%'],
+        ['Konverzní poměr',r.perf_clicks>0?(num(r.perf_conv_rate,2)+'%'):'—'],
         ['Konverze',num(r.perf_conversions)],
       ].map(([l,v])=>`<div class="col-6"><div class="border rounded p-2 text-center">
         <div class="fw-semibold">${v}</div>

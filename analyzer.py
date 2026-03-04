@@ -242,6 +242,7 @@ class ZboziAnalyzer:
         return {
             "id": str(item.get("itemId") or ""),
             "name": item.get("name") or "—",
+            "productName": item.get("name") or "",
             "price": price,
             "paired": paired,
             "productId": product_id,
@@ -380,6 +381,10 @@ class ZboziAnalyzer:
                         "categoryName": p.get("categoryName"),
                     }
             if isinstance(products, list):
+                if products:
+                    with open("debug_products.json", "w") as df:
+                        import json as _j
+                        _j.dump(products[0], df, ensure_ascii=False, indent=2)
                 for p in products:
                     _extract_product(p)
             elif isinstance(products, dict) and "shopCount" in products:
@@ -393,6 +398,8 @@ class ZboziAnalyzer:
                 item["shopCount"] = pd["shopCount"]
                 item["minPrice"] = pd["minPrice"]
                 item["maxPrice"] = pd["maxPrice"]
+                if pd.get("productName"):
+                    item["productName"] = pd["productName"]
                 # Spočítat priceVsMin pokud máme cenu položky
                 my_price = float(item["price"]) if item.get("price") else None
                 min_p = float(pd["minPrice"]) if pd.get("minPrice") and pd["minPrice"] > 0 else None
@@ -460,6 +467,20 @@ class ZboziAnalyzer:
             fi = report.feed_items_by_id.get(item["id"])
             if not fi:
                 continue
+            # Název produktu – PRODUCTNAME z feedu se použije vždy, pokud:
+            # 1) item nemá název, nebo
+            # 2) item má jen generický placeholder "—", nebo
+            # 3) feed má delší/přesnější název (feed PRODUCTNAME je kanonický název produktu)
+            # Oprava: původní podmínka blokovala propagaci pokud API vrátilo jakýkoli název,
+            # i prázdný string. Nyní se feedový název použije pokud je neprázdný a lepší.
+            feed_name = fi.get("productName") or ""
+            if feed_name:
+                current_name = item.get("productName") or ""
+                current_item_name = item.get("name") or ""
+                if not current_name or current_name == "—" or current_item_name == "—":
+                    item["productName"] = feed_name
+                    if not current_item_name or current_item_name == "—":
+                        item["name"] = feed_name
             # Cena
             if item["price"] is None and fi.get("price") is not None:
                 item["price"] = fi["price"]
@@ -524,15 +545,27 @@ class ZboziAnalyzer:
         if not data:
             return
         try:
-            rows = data.get("data", [])
+            # Oprava: API může vrátit přímý list nebo dict s klíčem "data".
+            if isinstance(data, list):
+                rows = data
+            else:
+                rows = data.get("data") or data.get("rows") or []
             if not isinstance(rows, list) or not rows:
                 return
+            # Debug: write to file
+            with open("debug_stats.json", "w") as df:
+                import json as _j
+                _j.dump(rows[0] if rows else {}, df, ensure_ascii=False, indent=2)
 
-            # views/clicks/cost/conversions jsou nested objekty – sečíst
+            # views/clicks/cost/conversions jsou nested objekty – sečíst.
+            # Oprava konverzí: API může posílat konverze pod různými klíči.
+            # Pokud je hodnota dict (nested), bereme klíč "total" pokud existuje,
+            # jinak sečteme všechny numerické hodnoty (původní chování _num).
             views = sum(self._m(r, "views") for r in rows)
             clicks = sum(self._m(r, "clicks") for r in rows)
             cost_raw = sum(self._m(r, "cost") for r in rows)
-            convs = sum(self._m(r, "conversions") for r in rows)
+            # Fallback klíče pro konverze: "conversions", "orders", "conversionsTotal"
+            convs = sum(self._m(r, "conversions", "orders", "conversionsTotal") for r in rows)
 
             cost = self._halere(cost_raw, clicks)
 
@@ -562,7 +595,8 @@ class ZboziAnalyzer:
                     "views": int(self._m(r, "views")),
                     "clicks": int(self._m(r, "clicks")),
                     "cost": round(self._halere(rc, r_clicks), 2),
-                    "conversions": int(self._m(r, "conversions")),
+                    # Oprava: stejný fallback klíč jako u souhrnné hodnoty výše
+                    "conversions": int(self._m(r, "conversions", "orders", "conversionsTotal")),
                 })
             report.raw_stats_daily = daily
         except Exception as e:
@@ -633,7 +667,13 @@ class ZboziAnalyzer:
         data = self._safe("reviews", report, self.api.get_reviews)
         if data:
             try:
-                rows = data.get("data", [])
+                # Oprava: API může vrátit přímý list nebo dict s klíčem "data".
+                # Původní kód používal pouze data.get("data", []) – pokud API vrátilo
+                # přímý list, rows byl vždy prázdný.
+                if isinstance(data, list):
+                    rows = data
+                else:
+                    rows = data.get("data") or data.get("reviews") or []
                 if isinstance(rows, list) and rows:
                     report.reviews_total = data.get("totalCount", len(rows))
                     ratings = []
@@ -678,7 +718,11 @@ class ZboziAnalyzer:
         data2 = self._safe("product_reviews", report, self.api.get_product_reviews)
         if data2:
             try:
-                rows2 = data2.get("data", [])
+                # Oprava: stejný problém jako u shop reviews – zpracuj přímý list i dict.
+                if isinstance(data2, list):
+                    rows2 = data2
+                else:
+                    rows2 = data2.get("data") or data2.get("reviews") or []
                 if isinstance(rows2, list):
                     normalized_prod = []
                     for r in rows2:
