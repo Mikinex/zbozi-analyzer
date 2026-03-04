@@ -1082,7 +1082,7 @@ function renderCategories(r){
       <tbody>${cats.map(c=>{
         const hasStat=c.clicks>0||c.views>0;
         return `<tr>
-          <td class="fw-semibold" style="max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(c.category)}">${esc(c.category||'—')}</td>
+          <td class="fw-semibold" style="min-width:120px;max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(c.category)}">${(()=>{const parts=(c.category||'').split(' | ');return esc(parts[parts.length-1]||'—');})()}</td>
           <td class="text-end">${num(c.items)}</td>
           <td class="text-end">${c.pairedPct}%</td>
           <td class="text-end">${c.avgShopCount!=null?c.avgShopCount.toFixed(1):'—'}</td>
