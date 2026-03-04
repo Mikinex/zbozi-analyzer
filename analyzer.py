@@ -372,6 +372,21 @@ class ZboziAnalyzer:
             def _extract_product(p):
                 pid = p.get("productId") or p.get("id")
                 if pid:
+                    # Spočítat minimum u OSTATNÍCH eshopů (bez vlastního obchodu).
+                    # API vrací shopItems se shopId a price pro každý obchod na kartě.
+                    # Oprava: původní kód bral pouze globální minPrice, které zahrnuje
+                    # i vlastní cenu – pokud je obchod nejlevnější, minPrice == vlastní cena,
+                    # takže sloupec "Min. u ostatních" zobrazoval stejnou hodnotu jako "Vaše cena".
+                    shop_items = p.get("shopItems") or []
+                    own_shop_id = int(self.api.shop_id) if self.api.shop_id else None
+                    competitor_prices = []
+                    for si in shop_items:
+                        si_shop_id = si.get("shopId")
+                        si_price = si.get("price")
+                        if si_price is not None and si_shop_id != own_shop_id:
+                            competitor_prices.append(float(si_price))
+                    min_competitors = min(competitor_prices) if competitor_prices else None
+
                     product_data[pid] = {
                         "shopCount": p.get("shopCount"),
                         "minPrice": p.get("minPrice"),
@@ -379,6 +394,8 @@ class ZboziAnalyzer:
                         "productName": p.get("productName") or p.get("name"),
                         "categoryId": p.get("categoryId"),
                         "categoryName": p.get("categoryName"),
+                        # Minimum ceny u ostatních eshopů (bez vlastního obchodu)
+                        "minPriceCompetitors": min_competitors,
                     }
             if isinstance(products, list):
                 if products:
@@ -398,19 +415,27 @@ class ZboziAnalyzer:
                 item["shopCount"] = pd["shopCount"]
                 item["minPrice"] = pd["minPrice"]
                 item["maxPrice"] = pd["maxPrice"]
+                # Minimum u ostatních eshopů (bez vlastního obchodu) – oprava klíčového bugu:
+                # tato hodnota se zobrazuje v tabulce "Min. u ostatních" a musí vylučovat
+                # vlastní cenu. API globální minPrice zahrnuje i náš obchod.
+                item["minPriceCompetitors"] = pd.get("minPriceCompetitors")
                 if pd.get("productName"):
                     item["productName"] = pd["productName"]
-                # Spočítat priceVsMin pokud máme cenu položky
+                # Spočítat priceVsMin pokud máme cenu položky.
+                # Pro porovnání s konkurencí používáme minPriceCompetitors (bez vlastní ceny),
+                # pokud je k dispozici. Fallback na globální minPrice (zahrnuje i naši cenu).
                 my_price = float(item["price"]) if item.get("price") else None
-                min_p = float(pd["minPrice"]) if pd.get("minPrice") and pd["minPrice"] > 0 else None
+                min_comp = float(pd["minPriceCompetitors"]) if pd.get("minPriceCompetitors") and pd["minPriceCompetitors"] > 0 else None
+                min_p = min_comp if min_comp is not None else (float(pd["minPrice"]) if pd.get("minPrice") and pd["minPrice"] > 0 else None)
                 max_p = float(pd["maxPrice"]) if pd.get("maxPrice") and pd["maxPrice"] > 0 else None
                 if my_price and min_p:
                     item["priceVsMin"] = round(my_price / min_p, 3)
-                    # Doporučená cena: pokud jsme dražší než min, doporučit min; jinak OK
+                    # Doporučená cena: pokud jsme dražší než min konkurence, doporučit min; jinak OK
                     if my_price > min_p * 1.05:
                         item["recommendedPrice"] = round(min_p, 0)
                         item["priceSavings"] = round(my_price - min_p, 0)
-                    elif my_price < min_p:
+                    elif my_price <= min_p:
+                        # Jsme nejlevnější nebo stejná cena jako nejlevnější konkurent
                         item["priceAdvantage"] = round(min_p - my_price, 0)
 
         # Přepočítat cenové metriky
@@ -997,6 +1022,9 @@ class ZboziAnalyzer:
                 "productName": i.get("productName"),
                 "price": i.get("price"),
                 "minPrice": i.get("minPrice"),
+                # Minimum u ostatních eshopů (bez vlastního obchodu) – klíčová oprava.
+                # Tato hodnota se zobrazuje ve sloupci "Min. u ostatních" v tabulce nejlepších cen.
+                "minPriceCompetitors": i.get("minPriceCompetitors"),
                 "priceAdvantage": i.get("priceAdvantage"),
                 "shopCount": i.get("shopCount"),
                 "category": i.get("category"),

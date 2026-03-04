@@ -788,13 +788,19 @@ function renderOverview(r){
   document.getElementById('comp-cheapest').innerHTML=chp.length
     ? `<div class="table-responsive"><table class="table table-sm tbl mb-0"><thead><tr>
         <th>Produkt</th><th class="text-end">Vaše cena</th><th class="text-end">Min. u ostatních</th><th class="text-end">Výhoda</th><th class="text-end">Eshopů</th>
-      </tr></thead><tbody>${chp.map(i=>`<tr>
+      </tr></thead><tbody>${chp.map(i=>{
+        // Oprava: zobrazit minPriceCompetitors (min. cena ostatních eshopů bez vlastního obchodu).
+        // Dříve se zobrazovalo i.minPrice (globální min. ze všech eshopů vč. vlastního),
+        // takže když byl obchod nejlevnější, hodnota se rovnala "Vaše cena" – chybně.
+        const minOthers = i.minPriceCompetitors != null ? num(i.minPriceCompetitors)+' Kč' : (i.minPrice != null ? num(i.minPrice)+' Kč' : '—');
+        const advantage = i.priceAdvantage != null ? '-'+num(i.priceAdvantage)+' Kč' : (i.minPriceCompetitors != null ? '= min' : '—');
+        return `<tr>
         <td title="${esc(i.itemId||'')}">${esc((i.productName||i.itemId||'').substring(0,50))}</td>
         <td class="text-end text-success fw-semibold">${num(i.price)} Kč</td>
-        <td class="text-end">${num(i.minPrice)} Kč</td>
-        <td class="text-end text-success">${i.priceAdvantage?'-'+num(i.priceAdvantage)+' Kč':'= min'}</td>
+        <td class="text-end">${minOthers}</td>
+        <td class="text-end text-success">${advantage}</td>
         <td class="text-end">${i.shopCount||'—'}</td>
-      </tr>`).join('')}</tbody></table></div>`
+      </tr>`;}).join('')}</tbody></table></div>`
     : '<span class="text-muted">Žádné položky s nejlepší cenou</span>';
 
   // High demand
