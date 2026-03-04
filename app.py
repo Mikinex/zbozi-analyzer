@@ -255,36 +255,63 @@ def api_call():
 
 @app.route("/export/csv", methods=["POST"])
 def export_csv():
-    """Export dat jako CSV soubor."""
+    """Export dat jako CSV soubor ke stažení.
+
+    Přijímá JSON: {"type": "items", "data": [...]}
+    Vrací CSV s UTF-8 BOM (pro správné zobrazení v Microsoft Excel).
+    Vnořené dict/list hodnoty jsou serializovány jako JSON string.
+    None hodnoty se exportují jako prázdný řetězec.
+    """
     body = request.get_json(silent=True) or {}
-    data_type = body.get("type", "items")  # items | stats | categories | feed
+    data_type = body.get("type", "export")
     rows = body.get("data", [])
 
     if not rows:
         return jsonify({"error": "Žádná data k exportu"}), 400
 
+    # UTF-8 BOM zajistí správné zobrazení diakritiky v Excelu
     output = io.StringIO()
-    if rows:
-        # Hlavičky z klíčů prvního řádku
-        keys = list(rows[0].keys())
-        writer = csv.DictWriter(output, fieldnames=keys, extrasaction="ignore")
-        writer.writeheader()
-        for row in rows:
-            # Flatten nested values
-            flat = {}
-            for k in keys:
-                v = row.get(k)
-                if isinstance(v, (list, dict)):
-                    flat[k] = json.dumps(v, ensure_ascii=False)
-                else:
-                    flat[k] = v
-            writer.writerow(flat)
+    output.write("\ufeff")  # BOM
+
+    # Hlavičky z klíčů prvního řádku (union všech klíčů pro robustnost)
+    all_keys = []
+    seen_keys = set()
+    for row in rows[:10]:  # Skenujeme prvních 10 řádků pro kompletní seznam klíčů
+        for k in row.keys():
+            if k not in seen_keys:
+                all_keys.append(k)
+                seen_keys.add(k)
+
+    writer = csv.DictWriter(output, fieldnames=all_keys, extrasaction="ignore",
+                            lineterminator="\r\n")  # Windows line endings pro Excel
+    writer.writeheader()
+
+    for row in rows:
+        flat = {}
+        for k in all_keys:
+            v = row.get(k)
+            if v is None:
+                flat[k] = ""
+            elif isinstance(v, bool):
+                flat[k] = "1" if v else "0"
+            elif isinstance(v, (list, dict)):
+                flat[k] = json.dumps(v, ensure_ascii=False)
+            elif isinstance(v, float) and (v != v or v == float("inf") or v == float("-inf")):
+                flat[k] = ""  # NaN/Inf → prázdné pole
+            else:
+                flat[k] = v
+        writer.writerow(flat)
 
     csv_content = output.getvalue()
+    # Sanitizovat název souboru (odstranit nebezpečné znaky)
+    safe_type = "".join(c if c.isalnum() or c in "-_" else "_" for c in data_type)
     return Response(
-        csv_content,
-        mimetype="text/csv",
-        headers={"Content-Disposition": f"attachment; filename=zbozi_{data_type}.csv"},
+        csv_content.encode("utf-8"),
+        mimetype="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f"attachment; filename=zbozi_{safe_type}.csv",
+            "Content-Type": "text/csv; charset=utf-8",
+        },
     )
 
 

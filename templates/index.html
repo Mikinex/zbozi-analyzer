@@ -217,32 +217,69 @@
             </div>
           </div>
 
-          <!-- Overpriced items -->
-          <div class="col-lg-6">
-            <div class="card">
-              <div class="card-body">
-                <div class="section-title"><i class="bi bi-arrow-up-circle text-danger me-1"></i>Dražší než konkurence – doporučení ceny</div>
-                <div id="comp-overpriced" class="small"></div>
-              </div>
-            </div>
-          </div>
-
           <!-- Cheapest / competitive advantage -->
           <div class="col-lg-6">
             <div class="card">
               <div class="card-body">
-                <div class="section-title"><i class="bi bi-trophy text-success me-1"></i>Vaše nejlepší ceny (konkurenční výhoda)</div>
+                <div class="d-flex align-items-center mb-2">
+                  <span class="section-title mb-0"><i class="bi bi-trophy text-success me-1"></i>Vaše nejlepší ceny (konkurenční výhoda)</span>
+                  <button class="btn btn-outline-success btn-sm ms-auto" onclick="exportTableCSV('nejlepsi-ceny','comp-cheapest-tbl')"><i class="bi bi-download me-1"></i>CSV</button>
+                </div>
                 <div id="comp-cheapest" class="small"></div>
               </div>
             </div>
           </div>
 
-          <!-- High demand products -->
-          <div class="col-12">
+          <!-- Most expensive items -->
+          <div class="col-lg-6">
             <div class="card">
               <div class="card-body">
-                <div class="section-title"><i class="bi bi-fire text-warning me-1"></i>Nejžádanější produkty (nejvíc eshopů na kartě)</div>
+                <div class="d-flex align-items-center mb-2">
+                  <span class="section-title mb-0"><i class="bi bi-arrow-up-circle text-danger me-1"></i>Nejdražší nabídky vs. konkurence</span>
+                  <button class="btn btn-outline-success btn-sm ms-auto" onclick="exportTableCSV('nejdrazsi','comp-expensive-tbl')"><i class="bi bi-download me-1"></i>CSV</button>
+                </div>
+                <div id="comp-mostexpensive" class="small"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Overpriced items – doporučení ceny -->
+          <div class="col-lg-6">
+            <div class="card">
+              <div class="card-body">
+                <div class="d-flex align-items-center mb-2">
+                  <span class="section-title mb-0"><i class="bi bi-exclamation-triangle text-warning me-1"></i>Doporučení ke snížení ceny (>5 % nad min.)</span>
+                  <button class="btn btn-outline-success btn-sm ms-auto" onclick="exportTableCSV('preplacene','comp-overpriced-tbl')"><i class="bi bi-download me-1"></i>CSV</button>
+                </div>
+                <div id="comp-overpriced" class="small"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- High demand products -->
+          <div class="col-lg-6">
+            <div class="card">
+              <div class="card-body">
+                <div class="d-flex align-items-center mb-2">
+                  <span class="section-title mb-0"><i class="bi bi-fire text-warning me-1"></i>Nejžádanější produkty (dle počtu eshopů + pozice)</span>
+                  <button class="btn btn-outline-success btn-sm ms-auto" onclick="exportTableCSV('nejzadanejsi','comp-demand-tbl')"><i class="bi bi-download me-1"></i>CSV</button>
+                </div>
                 <div id="comp-demand" class="small"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Full CSV export -->
+          <div class="col-12">
+            <div class="card">
+              <div class="card-body py-2">
+                <div class="d-flex align-items-center gap-3 flex-wrap">
+                  <span class="section-title mb-0"><i class="bi bi-download me-1"></i>Export dat</span>
+                  <button class="btn btn-success btn-sm" onclick="exportFullCSV()"><i class="bi bi-file-earmark-spreadsheet me-1"></i>Stáhnout CSV – všechny položky</button>
+                  <button class="btn btn-outline-secondary btn-sm" onclick="exportCSV('statistiky',REPORT&&REPORT.raw_stats_daily)"><i class="bi bi-graph-up me-1"></i>CSV statistiky</button>
+                  <button class="btn btn-outline-secondary btn-sm" onclick="exportCSV('kategorie',REPORT&&REPORT.categories_analysis)"><i class="bi bi-tags me-1"></i>CSV kategorie</button>
+                  <span class="text-muted small ms-auto"><i class="bi bi-info-circle me-1"></i>CSV obsahuje všechna dostupná pole z analýzy</span>
+                </div>
               </div>
             </div>
           </div>
@@ -648,7 +685,7 @@ function resetAll(){
   REPORT=null;
   // Vyčistit DOM
   ['kpi-row','items-legend','comp-summary','camp-block','feed-block','diag-block',
-   'comp-overpriced','comp-cheapest','comp-demand','stats-kpis','dev-table','perf-detail',
+   'comp-overpriced','comp-cheapest','comp-mostexpensive','comp-demand','stats-kpis','dev-table','perf-detail',
    'cat-table','itbody','rev-summary','rev-list','prod-rev-list','feed-recs','sklik-recs',
    'ep-list','warn-list','dev-legend'].forEach(id=>{
     const el=document.getElementById(id);
@@ -767,11 +804,48 @@ function renderOverview(r){
     </table>
     ${r.items_price_worse>0?`<div class="mt-2 small text-muted"><i class="bi bi-info-circle me-1"></i>Přejděte na záložku <strong>Položky</strong> → filtr <em>Dražší než min</em> pro detail.</div>`:''}`;
 
-  // Top overpriced – doporučení ceny
+  // Top cheapest – nejlepší ceny (naše výhoda)
+  const chp=cs.topCheapest||[];
+  document.getElementById('comp-cheapest').innerHTML=chp.length
+    ? `<div class="table-responsive"><table id="comp-cheapest-tbl" class="table table-sm tbl mb-0"><thead><tr>
+        <th>Produkt</th><th class="text-end">Vaše cena</th><th class="text-end">Min. u ostatních</th><th class="text-end">Výhoda</th><th class="text-end">Eshopů</th>
+      </tr></thead><tbody>${chp.map(i=>{
+        const minOthers = i.minPriceCompetitors != null ? num(i.minPriceCompetitors)+' Kč' : (i.minPrice != null ? num(i.minPrice)+' Kč' : '—');
+        const advantage = i.priceAdvantage != null ? '-'+num(i.priceAdvantage)+' Kč' : (i.minPriceCompetitors != null ? '= min' : '—');
+        return `<tr>
+        <td title="${esc(i.itemId||'')}">${esc((i.productName||i.itemId||'').substring(0,50))}</td>
+        <td class="text-end text-success fw-semibold">${num(i.price)} Kč</td>
+        <td class="text-end">${minOthers}</td>
+        <td class="text-end text-success fw-semibold">${advantage}</td>
+        <td class="text-end">${i.shopCount||'—'}</td>
+      </tr>`;}).join('')}</tbody></table></div>
+      <div class="text-muted mt-1 small">Produkty kde máte nejnižší cenu – silná konkurenční výhoda.</div>`
+    : '<span class="text-muted">Žádné položky s nejlepší cenou</span>';
+
+  // Top most expensive – nejdražší nabídky (příležitost ke snížení)
+  const exp=cs.topMostExpensive||[];
+  document.getElementById('comp-mostexpensive').innerHTML=exp.length
+    ? `<div class="table-responsive"><table id="comp-expensive-tbl" class="table table-sm tbl mb-0"><thead><tr>
+        <th>Produkt</th><th class="text-end">Vaše cena</th><th class="text-end">Min. u ostatních</th><th class="text-end">O kolik dražší</th><th class="text-end">Eshopů</th>
+      </tr></thead><tbody>${exp.map(i=>{
+        const ratio=i.priceVsMin;
+        const pctAbove=ratio?'+'+Math.round((ratio-1)*100)+'%':'—';
+        const minOthers=i.minPriceCompetitors!=null?num(i.minPriceCompetitors)+' Kč':(i.minPrice!=null?num(i.minPrice)+' Kč':'—');
+        return `<tr>
+        <td title="${esc(i.itemId||'')}">${esc((i.productName||i.itemId||'').substring(0,50))}</td>
+        <td class="text-end text-danger fw-semibold">${num(i.price)} Kč</td>
+        <td class="text-end text-success">${minOthers}</td>
+        <td class="text-end"><span class="${ratio>1.2?'bc-red':ratio>1.1?'bc-orange':'bc-blue'}">${pctAbove}</span></td>
+        <td class="text-end">${i.shopCount||'—'}</td>
+      </tr>`;}).join('')}</tbody></table></div>
+      <div class="text-muted mt-1 small">Produkty kde je vaše cena nejvyšší ve srovnání s konkurencí. Zvažte přecenění.</div>`
+    : '<span class="text-muted small">Žádné produkty s vyšší cenou než konkurence</span>';
+
+  // Top overpriced – doporučení ceny (>5% nad min)
   const ovp=cs.topOverpriced||[];
   document.getElementById('comp-overpriced').innerHTML=ovp.length
-    ? `<div class="table-responsive"><table class="table table-sm tbl mb-0"><thead><tr>
-        <th>Produkt</th><th class="text-end">Vaše cena</th><th class="text-end">Min. cena</th><th class="text-end">Doporuč. cena</th><th class="text-end">Rozdíl</th><th class="text-end">Eshopů</th>
+    ? `<div class="table-responsive"><table id="comp-overpriced-tbl" class="table table-sm tbl mb-0"><thead><tr>
+        <th>Produkt</th><th class="text-end">Vaše cena</th><th class="text-end">Min. u ostatních</th><th class="text-end">Doporuč. cena</th><th class="text-end">Rozdíl</th><th class="text-end">Eshopů</th>
       </tr></thead><tbody>${ovp.map(i=>`<tr>
         <td title="${esc(i.itemId||'')}">${esc((i.productName||i.itemId||'').substring(0,50))}</td>
         <td class="text-end">${num(i.price)} Kč</td>
@@ -780,46 +854,29 @@ function renderOverview(r){
         <td class="text-end text-danger">+${num(i.priceSavings)} Kč</td>
         <td class="text-end">${i.shopCount||'—'}</td>
       </tr>`).join('')}</tbody></table></div>
-      <div class="text-muted mt-1">Top ${ovp.length} položek kde jste dražší než konkurence. Zvažte snížení ceny.</div>`
-    : '<span class="text-muted">Žádné položky dražší než konkurence o >5 %</span>';
+      <div class="text-muted mt-1 small">Top ${ovp.length} položek kde jste >5 % dražší než nejlevnější konkurent.</div>`
+    : '<span class="text-muted small">Žádné položky dražší než konkurence o >5 %</span>';
 
-  // Top cheapest
-  const chp=cs.topCheapest||[];
-  document.getElementById('comp-cheapest').innerHTML=chp.length
-    ? `<div class="table-responsive"><table class="table table-sm tbl mb-0"><thead><tr>
-        <th>Produkt</th><th class="text-end">Vaše cena</th><th class="text-end">Min. u ostatních</th><th class="text-end">Výhoda</th><th class="text-end">Eshopů</th>
-      </tr></thead><tbody>${chp.map(i=>{
-        // Oprava: zobrazit minPriceCompetitors (min. cena ostatních eshopů bez vlastního obchodu).
-        // Dříve se zobrazovalo i.minPrice (globální min. ze všech eshopů vč. vlastního),
-        // takže když byl obchod nejlevnější, hodnota se rovnala "Vaše cena" – chybně.
-        const minOthers = i.minPriceCompetitors != null ? num(i.minPriceCompetitors)+' Kč' : (i.minPrice != null ? num(i.minPrice)+' Kč' : '—');
-        const advantage = i.priceAdvantage != null ? '-'+num(i.priceAdvantage)+' Kč' : (i.minPriceCompetitors != null ? '= min' : '—');
-        return `<tr>
-        <td title="${esc(i.itemId||'')}">${esc((i.productName||i.itemId||'').substring(0,50))}</td>
-        <td class="text-end text-success fw-semibold">${num(i.price)} Kč</td>
-        <td class="text-end">${minOthers}</td>
-        <td class="text-end text-success">${advantage}</td>
-        <td class="text-end">${i.shopCount||'—'}</td>
-      </tr>`;}).join('')}</tbody></table></div>`
-    : '<span class="text-muted">Žádné položky s nejlepší cenou</span>';
-
-  // High demand
+  // High demand – nejžádanější produkty (dle shopCount + topPosition)
   const hd=cs.topHighDemand||[];
   document.getElementById('comp-demand').innerHTML=hd.length
-    ? `<div class="table-responsive"><table class="table table-sm tbl mb-0"><thead><tr>
-        <th>Produkt</th><th>Kategorie</th><th class="text-end">Vaše cena</th><th class="text-end">Eshopů na kartě</th><th class="text-end">Cena vs min</th>
+    ? `<div class="table-responsive"><table id="comp-demand-tbl" class="table table-sm tbl mb-0"><thead><tr>
+        <th>Produkt</th><th>Kategorie</th><th class="text-end">Vaše cena</th><th class="text-end">Eshopů na kartě</th><th class="text-end">Vaše pozice</th><th class="text-end">Cena vs min</th>
       </tr></thead><tbody>${hd.map(i=>{
         const ratio=i.priceVsMin;
         const rc=ratio>1.1?'text-danger':ratio>1.0?'text-warning':'text-success';
+        const pos=i.topPosition!=null&&i.topPosition>0?`<span class="bc-blue">${i.topPosition}</span>`:
+                  i.topPosition===0?'<span class="text-muted">—</span>':'—';
         return `<tr>
         <td title="${esc(i.itemId||'')}">${esc((i.productName||i.itemId||'').substring(0,50))}</td>
         <td>${esc((i.category||'').substring(0,30))}</td>
         <td class="text-end">${num(i.price)} Kč</td>
-        <td class="text-end fw-semibold">${i.shopCount}</td>
+        <td class="text-end fw-semibold"><span class="${i.shopCount>20?'bc-red':i.shopCount>10?'bc-orange':'bc-blue'}">${i.shopCount}</span></td>
+        <td class="text-end">${pos}</td>
         <td class="text-end ${rc}">${ratio?'×'+ratio.toFixed(2):'—'}</td>
       </tr>`;}).join('')}</tbody></table></div>
-      <div class="text-muted mt-1">Produkty s 20+ eshopy na kartě – vysoká poptávka. Sledujte cenu a pozici.</div>`
-    : '<span class="text-muted">Žádné produkty s 20+ eshopy</span>';
+      <div class="text-muted mt-1 small">Seřazeno dle počtu eshopů na kartě + vaší pozice. Tyto produkty jsou nejvíce poptávané.</div>`
+    : '<span class="text-muted small">Žádné produkty s dostupnými konkurenčními daty</span>';
 
   // Campaign – creditWithoutVAT, creditWithVAT, limit
   const camp=r.campaign_info||{};
@@ -1310,6 +1367,58 @@ async function exportCSV(type, data){
     a.href=url; a.download=`zbozi_${type}.csv`; a.click();
     URL.revokeObjectURL(url);
   }catch(e){ alert('Chyba: '+e.message); }
+}
+
+// Exportuje všechna data položek z analýzy (raw_items) jako plné CSV
+async function exportFullCSV(){
+  if(!REPORT||!REPORT.raw_items||!REPORT.raw_items.length){ alert('Nejprve spusťte analýzu'); return; }
+  // Přidáme shopId a datum do každého řádku pro kontext
+  const rows=REPORT.raw_items.map(i=>({
+    shopId: REPORT.shop_id,
+    generatedAt: REPORT.generated_at,
+    itemId: i.id||'',
+    name: i.name||'',
+    productName: i.productName||'',
+    price: i.price??'',
+    minPrice: i.minPrice??'',
+    minPriceCompetitors: i.minPriceCompetitors??'',
+    maxPrice: i.maxPrice??'',
+    priceVsMin: i.priceVsMin??'',
+    recommendedPrice: i.recommendedPrice??'',
+    priceSavings: i.priceSavings??'',
+    priceAdvantage: i.priceAdvantage??'',
+    shopCount: i.shopCount??'',
+    paired: i.paired?1:0,
+    category: i.category||'',
+    categoryId: i.categoryId||'',
+    manufacturer: i.manufacturer||'',
+    hasEan: i.hasEan?1:0,
+    hasParams: i.hasParams?1:0,
+    hasDelivery: i.hasDelivery?1:0,
+    delivery: i.delivery??'',
+    topPosition: i.topPosition??'',
+    fromCheapestPosition: i.fromCheapestPosition??'',
+    maxCpc: i.maxCpc??'',
+    suggestedCpc: i.suggestedCpc??'',
+    url: i.url||'',
+  }));
+  await exportCSV('vsechny-polozky', rows);
+}
+
+// Exportuje data z HTML tabulky dle ID (jako záloha pokud data nejsou v JS)
+function exportTableCSV(filename, tableId){
+  const tbl=document.getElementById(tableId);
+  if(!tbl){ alert('Tabulka nenalezena'); return; }
+  const rows=[];
+  const headers=[];
+  tbl.querySelectorAll('thead th').forEach(th=>headers.push(th.textContent.trim()));
+  tbl.querySelectorAll('tbody tr').forEach(tr=>{
+    const row={};
+    tr.querySelectorAll('td').forEach((td,i)=>{ row[headers[i]||i]=td.textContent.trim(); });
+    rows.push(row);
+  });
+  if(!rows.length){ alert('Žádná data v tabulce'); return; }
+  exportCSV(filename, rows);
 }
 </script>
 </body>

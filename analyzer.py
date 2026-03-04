@@ -699,8 +699,14 @@ class ZboziAnalyzer:
                     rows = data
                 else:
                     rows = data.get("data") or data.get("reviews") or []
+                # Nastavíme celkový počet recenzí vždy, i když je rows prázdné.
+                # API může vrátit totalCount=5 ale data=[] pokud jsou mimo časový rozsah.
+                if isinstance(data, dict) and "totalCount" in data:
+                    report.reviews_total = int(data["totalCount"])
+                elif isinstance(rows, list):
+                    report.reviews_total = len(rows)
+
                 if isinstance(rows, list) and rows:
-                    report.reviews_total = data.get("totalCount", len(rows))
                     ratings = []
                     pos = neg = 0
                     normalized_reviews = []
@@ -1030,9 +1036,40 @@ class ZboziAnalyzer:
                 "category": i.get("category"),
             })
 
-        # Produkty s vysokou konkurencí (>20 obchodů) – žádané produkty
-        high_demand = [i for i in report.raw_items if i.get("shopCount") and int(i["shopCount"]) >= 20]
-        high_demand.sort(key=lambda x: int(x.get("shopCount") or 0), reverse=True)
+        # Top produkty kde jsme nejdražší (příležitost ke snížení ceny)
+        # Seřazeno dle cenového rozdílu (priceSavings) – nejvyšší nahoře.
+        # Tato tabulka se liší od topOverpriced tím, že zobrazuje i produkty kde jsme nejdražší
+        # v absolutní hodnotě, nejen relativně.
+        most_expensive = [i for i in report.raw_items if i.get("priceVsMin") and i["priceVsMin"] > 1.0]
+        most_expensive.sort(key=lambda x: (x.get("priceVsMin") or 1.0), reverse=True)
+        top_most_expensive = []
+        for i in most_expensive[:20]:
+            top_most_expensive.append({
+                "itemId": i.get("itemId"),
+                "productName": i.get("productName"),
+                "price": i.get("price"),
+                "minPrice": i.get("minPrice"),
+                "minPriceCompetitors": i.get("minPriceCompetitors"),
+                "priceVsMin": i.get("priceVsMin"),
+                "priceSavings": i.get("priceSavings"),
+                "recommendedPrice": i.get("recommendedPrice"),
+                "shopCount": i.get("shopCount"),
+                "category": i.get("category"),
+            })
+
+        # Produkty s vysokou konkurencí – žádané produkty.
+        # Primárně dle prokliků (topPosition = nízká číslo → lepší viditelnost → více kliknutí),
+        # sekundárně dle počtu eshopů na kartě (hodně eshopů = žádaný produkt).
+        # Jelikož API neposkytuje kliknutí per-item, používáme topPosition jako proxy metriku.
+        # Skóre: shopCount * 1000 - topPosition (pokud je topPosition k dispozici)
+        def _demand_score(item):
+            sc = float(item.get("shopCount") or 0)
+            tp = item.get("topPosition")
+            pos_bonus = (100 - float(tp)) if tp is not None and float(tp) > 0 else 0
+            return sc * 1000 + pos_bonus
+
+        high_demand = [i for i in report.raw_items if i.get("shopCount") and int(i["shopCount"]) >= 5]
+        high_demand.sort(key=_demand_score, reverse=True)
         top_high_demand = []
         for i in high_demand[:20]:
             top_high_demand.append({
@@ -1042,6 +1079,8 @@ class ZboziAnalyzer:
                 "shopCount": i.get("shopCount"),
                 "category": i.get("category"),
                 "priceVsMin": i.get("priceVsMin"),
+                "topPosition": i.get("topPosition"),
+                "fromCheapestPosition": i.get("fromCheapestPosition"),
             })
 
         report.competition_summary = {
@@ -1056,6 +1095,7 @@ class ZboziAnalyzer:
             "countOverpriced": len(overpriced),
             "topOverpriced": top_overpriced,
             "topCheapest": top_cheapest,
+            "topMostExpensive": top_most_expensive,
             "topHighDemand": top_high_demand,
         }
 
