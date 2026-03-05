@@ -264,6 +264,8 @@ class ZboziAnalyzer:
             "maxPrice": None,
             "priceVsMin": None,
             "suggestedCpc": suggested_cpc,
+            # cpcGap = suggestedCpc - maxCpc: kladné = nedobídnuto, záporné = přebídnuto, None = data chybí
+            "cpcGap": round(suggested_cpc - float(max_cpc), 2) if suggested_cpc is not None and max_cpc is not None else None,
             "topRank": top_position,
             "productRating": None,
             "productRatingCount": None,

@@ -269,6 +269,19 @@
             </div>
           </div>
 
+          <!-- CPC doporučení – kde ztrácíš vs přeplácíš -->
+          <div class="col-12">
+            <div class="card">
+              <div class="card-body">
+                <div class="d-flex align-items-center mb-2">
+                  <span class="section-title mb-0"><i class="bi bi-currency-exchange text-primary me-1"></i>CPC doporučení – analýza bidování</span>
+                  <button class="btn btn-outline-success btn-sm ms-auto" onclick="exportTableCSV('cpc-underbid','cpc-underbid-tbl')"><i class="bi bi-download me-1"></i>CSV</button>
+                </div>
+                <div id="cpc-recommendations"></div>
+              </div>
+            </div>
+          </div>
+
           <!-- Full CSV export -->
           <div class="col-12">
             <div class="card">
@@ -857,6 +870,9 @@ function renderOverview(r){
       <div class="text-muted mt-1 small">Top ${ovp.length} položek kde jste >5 % dražší než nejlevnější konkurent.</div>`
     : '<span class="text-muted small">Žádné položky dražší než konkurence o >5 %</span>';
 
+  // CPC doporučení – analýza bidování per-kategorie
+  renderCpcRecommendations(r);
+
   // High demand – nejžádanější produkty (dle shopCount + topPosition)
   const hd=cs.topHighDemand||[];
   document.getElementById('comp-demand').innerHTML=hd.length
@@ -1357,6 +1373,115 @@ function exCopy(){
 }
 
 /* ══════════════════════════════════════════════════════
+   CPC DOPORUČENÍ
+══════════════════════════════════════════════════════ */
+function renderCpcRecommendations(r){
+  const el=document.getElementById('cpc-recommendations');
+  if(!el) return;
+  const cats=r.categories_analysis||[];
+  const items=r.raw_items||[];
+
+  // Tabulka A: kategorie kde naše maxCpc < suggestedCpc (gap > 0)
+  const underbid=cats.filter(c=>c.cpcGap!=null&&c.cpcGap>0&&c.avgSuggestedCpc!=null&&c.avgMaxCpc!=null)
+    .sort((a,b)=>b.cpcGap-a.cpcGap);
+
+  // Tabulka B: kategorie kde naše maxCpc > suggestedCpc (gap < 0)
+  const overbid=cats.filter(c=>c.cpcGap!=null&&c.cpcGap<0&&c.avgSuggestedCpc!=null&&c.avgMaxCpc!=null)
+    .sort((a,b)=>a.cpcGap-b.cpcGap); // nejzápornější první = nejvyšší přeplatek
+
+  // Skupina C: položky se suggestedCpc ale bez nastaveného maxCpc (nebo maxCpc=0)
+  const noCpc=items.filter(i=>i.suggestedCpc!=null&&i.suggestedCpc>0&&!(i.maxCpc!=null&&i.maxCpc>0));
+
+  let html='';
+
+  // Skupina C – bez nastaveného maxCpc (varování)
+  if(noCpc.length){
+    html+=`<div class="alert alert-warning py-2 small mb-3">
+      <i class="bi bi-exclamation-triangle-fill me-2"></i>
+      <strong>${noCpc.length} položek</strong> má doporučené CPC od Zboží.cz, ale nemají nastavené MAX_CPC.
+      Bez nastavení maxCpc Zboží.cz používá výchozí bidování – možná zbytečně přeplácíte nebo nezobrazujete.
+      <button class="btn btn-warning btn-sm ms-2 py-0" onclick="exportCSV('bez-cpc',${JSON.stringify(noCpc.map(i=>({itemId:i.id,name:i.name||i.productName||'',category:i.category||'',suggestedCpc:i.suggestedCpc??'',maxCpc:i.maxCpc??'',price:i.price??''})))})"><i class="bi bi-download me-1"></i>CSV (${noCpc.length})</button>
+    </div>`;
+  }
+
+  const catShortName=cat=>{const p=(cat||'').split(' | ');return p[p.length-1]||cat||'—';};
+
+  // Tabulka A – kde ztrácíme prokliky
+  if(underbid.length){
+    html+=`<div class="mb-3">
+      <div class="fw-semibold small mb-1 text-danger"><i class="bi bi-arrow-down-circle me-1"></i>Kde ztrácíš prokliky – naše CPC je pod doporučením (${underbid.length} kategorií)</div>
+      <div class="table-responsive">
+      <table id="cpc-underbid-tbl" class="table table-sm tbl mb-0">
+        <thead><tr>
+          <th>Kategorie</th>
+          <th class="text-end">Položek</th>
+          <th class="text-end">Náš prům. max CPC</th>
+          <th class="text-end">Doporučené CPC</th>
+          <th class="text-end">Gap (chybí)</th>
+          <th class="text-end">% pod doporučením</th>
+        </tr></thead>
+        <tbody>${underbid.map(c=>{
+          const gap=c.cpcGap;
+          const pctBelow=c.avgSuggestedCpc>0?Math.round(gap/c.avgSuggestedCpc*100):0;
+          const gapCls=gap>=5?'bc-red':gap>=2?'bc-orange':'bc-blue';
+          return `<tr>
+            <td title="${esc(c.category)}">${esc(catShortName(c.category))}</td>
+            <td class="text-end">${num(c.items)}</td>
+            <td class="text-end">${num(c.avgMaxCpc,2)} Kč</td>
+            <td class="text-end">${num(c.avgSuggestedCpc,2)} Kč</td>
+            <td class="text-end"><span class="${gapCls} fw-semibold">+${num(gap,2)} Kč</span></td>
+            <td class="text-end"><span class="${gapCls}">${pctBelow} % pod</span></td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table></div>
+      <div class="text-muted mt-1 small">Navýšením maxCpc v těchto kategoriích získáte více zobrazení a prokliků.</div>
+    </div>`;
+  } else {
+    html+=`<div class="text-muted small mb-2"><i class="bi bi-check-circle text-success me-1"></i>Žádné kategorie pod doporučeným CPC.</div>`;
+  }
+
+  // Tabulka B – kde pravděpodobně přeplácíme
+  if(overbid.length){
+    html+=`<div class="mb-3">
+      <div class="fw-semibold small mb-1 text-warning"><i class="bi bi-arrow-up-circle me-1"></i>Kde pravděpodobně přeplácíš – naše CPC je nad doporučením (${overbid.length} kategorií)</div>
+      <div class="table-responsive">
+      <table id="cpc-overbid-tbl" class="table table-sm tbl mb-0">
+        <thead><tr>
+          <th>Kategorie</th>
+          <th class="text-end">Položek</th>
+          <th class="text-end">Náš prům. max CPC</th>
+          <th class="text-end">Doporučené CPC</th>
+          <th class="text-end">Přeplatek</th>
+          <th class="text-end">% nad doporučením</th>
+        </tr></thead>
+        <tbody>${overbid.map(c=>{
+          const overAbs=Math.abs(c.cpcGap);
+          const pctAbove=c.avgSuggestedCpc>0?Math.round(overAbs/c.avgSuggestedCpc*100):0;
+          const overCls=overAbs>=5?'bc-red':overAbs>=2?'bc-orange':'bc-blue';
+          return `<tr>
+            <td title="${esc(c.category)}">${esc(catShortName(c.category))}</td>
+            <td class="text-end">${num(c.items)}</td>
+            <td class="text-end">${num(c.avgMaxCpc,2)} Kč</td>
+            <td class="text-end">${num(c.avgSuggestedCpc,2)} Kč</td>
+            <td class="text-end"><span class="${overCls} fw-semibold">+${num(overAbs,2)} Kč</span></td>
+            <td class="text-end"><span class="${overCls}">${pctAbove} % nad</span></td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table></div>
+      <div class="text-muted mt-1 small">Snížením maxCpc v těchto kategoriích ušetříte rozpočet bez výrazného dopadu na zobrazení.</div>
+    </div>`;
+  } else {
+    html+=`<div class="text-muted small mb-2"><i class="bi bi-check-circle text-success me-1"></i>Žádné kategorie nad doporučeným CPC.</div>`;
+  }
+
+  if(!underbid.length&&!overbid.length&&!noCpc.length){
+    html='<div class="text-muted small">Data CPC nejsou dostupná – zkontrolujte, zda jsou v API zapnuty searchInfo (loadSearchInfo=true) a zda jsou v feedu nastaveny MAX_CPC hodnoty.</div>';
+  }
+
+  el.innerHTML=html;
+}
+
+/* ══════════════════════════════════════════════════════
    CSV EXPORT
 ══════════════════════════════════════════════════════ */
 async function exportCSV(type, data){
@@ -1404,6 +1529,8 @@ async function exportFullCSV(){
     fromCheapestPosition: i.fromCheapestPosition??'',
     maxCpc: i.maxCpc??'',
     suggestedCpc: i.suggestedCpc??'',
+    // cpcGap = suggestedCpc - maxCpc: kladné = nedobídnuto, záporné = přebídnuto
+    cpcGap: i.cpcGap??'',
     url: i.url||'',
   }));
   await exportCSV('vsechny-polozky', rows);
