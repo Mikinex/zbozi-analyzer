@@ -349,8 +349,76 @@ class ZboziAnalyzer:
         if not product_ids:
             return
 
-        # Omezit na max 500 produktů (50 batchů × 2s = ~2 min)
-        product_ids = product_ids[:500]
+        # ── Chytrá prioritizace 500 produktů (stratifikovaný sampling) ──────────
+        # Původní prostý ořez [:500] bral jen první produkty bez ohledu na důležitost.
+        # Nová logika:
+        #   1) Produkty se shopCount > 1 mají konkurenci → priorita
+        #   2) Stratifikace: 500 slotů rozdělíme proporcionálně mezi kategorie,
+        #      aby byl průřez i při omezení na 500 (ne jen nejpočetnější kategorie)
+        #   3) V rámci každé kategorie řadíme dle shopCount sestupně (nejvíc konkurentů = nejdůležitější)
+        #   4) Produkty bez konkurence (shopCount <= 1) na konec, pokud zbyde místo
+        MAX_IDS = 500
+
+        if len(product_ids) > MAX_IDS:
+            # Sestavit lookup: productId → shopCount a categoryId z raw_items
+            pid_meta = {}
+            for item in report.raw_items:
+                pid = item.get("productId")
+                if pid and pid not in pid_meta:
+                    pid_meta[pid] = {
+                        "shopCount": item.get("shopCount") or 0,
+                        "categoryId": item.get("categoryId") or "unknown",
+                    }
+
+            # Rozdělit na "s konkurencí" a "bez konkurence"
+            with_competition = [p for p in product_ids if pid_meta.get(p, {}).get("shopCount", 0) > 1]
+            without_competition = [p for p in product_ids if p not in set(with_competition)]
+
+            # Stratifikovaný sampling z produktů s konkurencí
+            # Seskupit dle kategorie, v každé seřadit sestupně dle shopCount
+            from collections import defaultdict as _defaultdict
+            by_cat = _defaultdict(list)
+            for pid in with_competition:
+                cat = pid_meta.get(pid, {}).get("categoryId", "unknown")
+                by_cat[cat].append(pid)
+
+            # Seřadit v rámci každé kategorie dle shopCount sestupně
+            for cat in by_cat:
+                by_cat[cat].sort(key=lambda p: pid_meta.get(p, {}).get("shopCount", 0), reverse=True)
+
+            # Proporcionální rozdělení 500 slotů mezi kategorie
+            total_with = len(with_competition)
+            slots_for_competition = min(MAX_IDS, total_with)
+            selected = []
+            if total_with > 0:
+                cats = list(by_cat.keys())
+                # Kolik slotů dostane každá kategorie (proporcionálně k počtu položek)
+                cat_slots = {}
+                remaining_slots = slots_for_competition
+                for i, cat in enumerate(cats):
+                    if i == len(cats) - 1:
+                        # Poslední kategorie dostane všechny zbývající sloty
+                        cat_slots[cat] = remaining_slots
+                    else:
+                        alloc = round(slots_for_competition * len(by_cat[cat]) / total_with)
+                        alloc = max(1, min(alloc, remaining_slots - (len(cats) - i - 1)))
+                        cat_slots[cat] = alloc
+                        remaining_slots -= alloc
+                # Vybrat ze každé kategorie přidělený počet (již seřazeno dle shopCount)
+                for cat in cats:
+                    selected.extend(by_cat[cat][:cat_slots.get(cat, 0)])
+
+            # Doplnit produkty bez konkurence pokud zbyde místo
+            remaining = MAX_IDS - len(selected)
+            if remaining > 0:
+                selected.extend(without_competition[:remaining])
+
+            product_ids = selected
+            logging.info(
+                f"Prioritizace produktů: {len(product_ids)} vybráno z {len(seen)} "
+                f"({len(with_competition)} s konkurencí, stratifikováno do {len(by_cat)} kategorií)"
+            )
+        # Pokud je produktů <= 500, žádný ořez nepotřebujeme
 
         # Volat API po dávkách max 10
         product_data = {}  # productId -> {shopCount, minPrice, maxPrice, shopItems}
@@ -369,6 +437,13 @@ class ZboziAnalyzer:
                 continue
             # Odpověď je list produktů nebo dict
             products = data if isinstance(data, list) else data.get("data", data)
+            # POZNÁMKA k CPC dat z /v1/products/{ids}:
+            # API Zboží.cz na produktové kartě NEPOSKYTUJE CPC data konkurence (topCpc, maxCpc ani podobná pole).
+            # Odpověď obsahuje: productId, productName, shopCount, minPrice, maxPrice, shopItems (s price, shopId).
+            # CPC data jsou dostupná pouze pro náš vlastní obchod:
+            #   - suggestedCpc: z /v1/shop/items s loadSearchInfo=true (doporučené CPC od Zboží.cz)
+            #   - maxCpcSearch: z /v1/shop/items (naše nastavené max. CPC)
+            # Pro CPC analýzu kategorií tedy používáme tato dvě pole z raw_items (ne z produktové karty).
             def _extract_product(p):
                 pid = p.get("productId") or p.get("id")
                 if pid:

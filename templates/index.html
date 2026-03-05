@@ -1076,6 +1076,8 @@ function renderCategories(r){
         <th class="text-end">Náklady</th>
         <th class="text-end">Konv.</th>
         <th class="text-end">CPC gap</th>
+        <th class="text-end" title="Průměrné doporučené CPC od Zboží.cz API (suggestedCpc z searchInfo). Zdroj: /v1/shop/items s loadSearchInfo.">Prům. CPC</th>
+        <th class="text-end" title="Průměrné nastavené MAX CPC obchodu (maxCpcSearch z feedu nebo API). Poznámka: CPC konkurence (topCpc/maxCpc na produktové kartě) API Zboží.cz neposkytuje – tato data nejsou dostupná.">Max CPC (náš)</th>
         <th class="text-center">Bez param.</th>
         <th class="text-center">Bez EAN</th>
       </tr></thead>
@@ -1092,6 +1094,8 @@ function renderCategories(r){
           <td class="text-end">${hasStat?num(c.cost,0)+' Kč':'—'}</td>
           <td class="text-end">${hasStat?num(c.conversions):'—'}</td>
           <td class="text-end">${cpcGapBadge(c.cpcGap)}</td>
+          <td class="text-end">${c.avgSuggestedCpc!=null?num(c.avgSuggestedCpc,2)+' Kč':'—'}</td>
+          <td class="text-end">${c.avgMaxCpc!=null?num(c.avgMaxCpc,2)+' Kč':'—'}</td>
           <td class="text-center">${c.noParams>0?`<span class="bc-orange">${c.noParams}</span>`:'<span class="bc-green">✓</span>'}</td>
           <td class="text-center">${c.noEan>0?`<span class="bc-orange">${c.noEan}</span>`:'<span class="bc-green">✓</span>'}</td>
         </tr>`;
